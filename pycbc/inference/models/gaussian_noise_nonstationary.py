@@ -8,11 +8,17 @@ from ConfigParser import NoSectionError, NoOptionError
 import numpy
 from .gaussian_noise import GaussianNoise
 
+# Parse command line arguments
+parser = ArgumentParser()
+parser.add_argument('--Sigma_Inverted', default=None, type=float)
+args = parser.parse_args()
+Sigma_Inverted_Loaded = args.threshold
+
 class GaussianNoise_NonStationary(GaussianNoise):
 
     def __init__(self, variable_params, data, low_frequency_cutoff, psds=None,
                  high_frequency_cutoff=None, normalize=False,
-                 static_params=None, nonstationary_noise_covariance=None, **kwargs):
+                 static_params=None, nonstationary_noise_covariance=Sigma_Inverted_Loaded, **kwargs):
         # set up the boiler-plate attributes
         super(GaussianNoise_NonStationary, self).__init__(variable_params, data, low_frequency_cutoff, psds=psds,
             high_frequency_cutoff=high_frequency_cutoff, normalize=normalize,
