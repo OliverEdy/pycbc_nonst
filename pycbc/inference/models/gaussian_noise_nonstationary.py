@@ -16,6 +16,8 @@ Sigma_Inverted_Loaded = args.threshold
 
 class GaussianNoise_NonStationary(GaussianNoise):
 
+    name = 'gaussian_noise_nonstationary'
+
     def __init__(self, variable_params, data, low_frequency_cutoff, psds=None,
                  high_frequency_cutoff=None, normalize=False,
                  static_params=None, nonstationary_noise_covariance=Sigma_Inverted_Loaded, **kwargs):
