@@ -14,7 +14,7 @@ parser.add_argument('--Sigma_Inverted', default=None, type=float)
 args = parser.parse_args()
 Sigma_Inverted_Loaded = args.threshold
 
-class GaussianNoise_NonStationary(GaussianNoise):
+class NonStationaryGaussianNoise(GaussianNoise):
 
     name = 'gaussian_noise_nonstationary'
 
@@ -22,10 +22,12 @@ class GaussianNoise_NonStationary(GaussianNoise):
                  high_frequency_cutoff=None, normalize=False,
                  static_params=None, nonstationary_noise_covariance=Sigma_Inverted_Loaded, **kwargs):
         # set up the boiler-plate attributes
-        super(GaussianNoise_NonStationary, self).__init__(variable_params, data, low_frequency_cutoff, psds=psds,
+        super(NonStationaryGaussianNoise, self).__init__(variable_params, data, low_frequency_cutoff, psds=psds,
             high_frequency_cutoff=high_frequency_cutoff, normalize=normalize,
             static_params=static_params, **kwargs)
+        # load the non-stationary noise covariance
         self.nonstationary_noise_covariance = nonstationary_noise_covariance
+        # use the non-stationary noise covariance for the loglikelihood
         self._loglikelihood = self._loglikelihood_nonst
 
     def _loglikelihood_nonst(self):
@@ -38,4 +40,6 @@ class GaussianNoise_NonStationary(GaussianNoise):
             det_logls[det] = numpy.real(loglikelihood).tolist()[0][0]
                 
         logl = sum(det_logls.values())
+        # setattr(self._current_stats, 'loglikelihood', logl)
+        self._current_stats.loglikelihood = logl
         return logl
