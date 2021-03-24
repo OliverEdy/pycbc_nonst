@@ -643,11 +643,12 @@ class NonStationaryGaussianNoise(GaussianNoise):
 #         return ['loglr', 'lognl']
 
     def _loglikelihood_nonst(self):
-        Sigma_inv = self.nonstationary_noise_covariance
+        # Sigma_inv = self.nonstationary_noise_covariance
         
         det_logls = {}
         for (det, d) in self._data.items():
             n = numpy.mat(d).T
+            Sigma_inv = numpy.identity(n.shape[0])
             loglikelihood = n.H.dot(Sigma_inv).dot(n)
             det_logls[det] = numpy.real(loglikelihood).tolist()[0][0]
                 
