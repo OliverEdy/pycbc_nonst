@@ -26,6 +26,7 @@ from .gaussian_noise import GaussianNoise
 from .marginalized_gaussian_noise import (MarginalizedPhaseGaussianNoise,
                                           MarginalizedGaussianNoise)
 from .single_template import SingleTemplate
+from .gaussian_noise_nonstationary import NonStationaryGaussianNoise
 
 
 # Used to manage a model instance across multiple cores or MPI
