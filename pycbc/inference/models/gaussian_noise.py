@@ -612,11 +612,14 @@ def high_frequency_cutoff_from_config(cp):
 
 from argparse import ArgumentParser
 
-# Parse command line arguments
-parser = ArgumentParser()
-parser.add_argument('--Sigma_Inverted', default=None, type=float)
-args = parser.parse_args()
-Sigma_Inverted_Loaded = args.threshold
+try:
+    # Parse command line arguments
+    parser = ArgumentParser()
+    parser.add_argument('--Sigma_Inverted', default=None, type=float)
+    args = parser.parse_args()
+    Sigma_Inverted_Loaded = args.Sigma_Inverted
+except:
+    Sigma_Inverted_Loaded = numpy.identity(10)
 
 class NonStationaryGaussianNoise(GaussianNoise):
 
