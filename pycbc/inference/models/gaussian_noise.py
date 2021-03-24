@@ -610,6 +610,7 @@ def high_frequency_cutoff_from_config(cp):
         high_frequency_cutoff = None
     return high_frequency_cutoff
 
+from argparse import ArgumentParser
 
 # Parse command line arguments
 parser = ArgumentParser()
