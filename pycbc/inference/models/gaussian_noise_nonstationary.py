@@ -3,7 +3,7 @@ The non-stationary noise covariance needs to be calculated separately and loaded
 """
 
 import logging
-from ConfigParser import NoSectionError, NoOptionError
+# from ConfigParser import NoSectionError, NoOptionError
 from argparse import ArgumentParser
 
 import numpy
