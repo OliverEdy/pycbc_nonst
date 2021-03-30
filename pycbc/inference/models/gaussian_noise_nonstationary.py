@@ -9,11 +9,12 @@ from argparse import ArgumentParser
 import numpy
 from .gaussian_noise import GaussianNoise
 
-# Parse command line arguments
-parser = ArgumentParser()
-parser.add_argument('--Sigma_Inverted', default=None, type=float)
-args = parser.parse_args()
-Sigma_Inverted_Loaded = args.threshold
+# # Parse command line arguments
+# parser = ArgumentParser()
+# parser.add_argument('--Sigma_Inverted', default=None, type=float)
+# args = parser.parse_args()
+# Sigma_Inverted_Loaded = args.threshold
+Sigma_Inverted_Loaded = numpy.identity(10)
 
 class NonStationaryGaussianNoise(GaussianNoise):
 
