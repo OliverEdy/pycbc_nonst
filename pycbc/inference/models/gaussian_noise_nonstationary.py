@@ -33,10 +33,10 @@ def Simplifying_S1_and_S2_for_Woodbury(A, C, V):
 
 def SVD_for_Woodbury(V, num_dec_places=5):
     u, s, vT = scipy.linalg.svd(V)
-    s = s[np.around(s, num_dec_places) > 0]
+    s = s[numpy.around(s, num_dec_places) > 0]
     m = s.shape[0]
     vT = vT[0:m, :]
-    V_mxn = np.diag(s) @ vT
+    V_mxn = numpy.diag(s) @ vT
     return V_mxn, m
 
 def Woodbury(A, U, V, m):
@@ -78,7 +78,7 @@ class NonStationaryGaussianNoise(GaussianNoise):
             N = n.shape[0]
             U = numpy.mat(Make_DFT(N))
             
-            B_t = numpy.mat(np.diag(modulation))
+            B_t = numpy.mat(numpy.diag(modulation))
             U_inv = U.H
 
             V = U @ B_t @ U_inv
