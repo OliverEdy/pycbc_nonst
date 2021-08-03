@@ -59,8 +59,8 @@ class NonStationaryGaussianNoise(GaussianNoise):
         super(NonStationaryGaussianNoise, self).__init__(variable_params, data, low_frequency_cutoff, psds=psds,
             high_frequency_cutoff=high_frequency_cutoff, normalize=normalize,
             static_params=static_params, **kwargs)
-        # load the non-stationary noise covariance
-        self.nonstationary_noise_covariance = nonstationary_noise_covariance
+#         # load the non-stationary noise covariance
+#         self.nonstationary_noise_covariance = nonstationary_noise_covariance
         # use the non-stationary noise covariance for the loglikelihood
         self._loglikelihood = self._loglikelihood_nonst
 
