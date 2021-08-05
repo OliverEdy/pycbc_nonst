@@ -83,8 +83,10 @@ class NonStationaryGaussianNoise(GaussianNoise):
 	
             N = n.shape[0]
             U = numpy.mat(Make_DFT(N))
+            numpy.save('./U.npy', U)
             
             B_t = numpy.mat(numpy.diag(n))#modulation))
+            numpy.save('./B.npy', B_t)
             U_inv = U.H
 
             V = U @ B_t @ U_inv
