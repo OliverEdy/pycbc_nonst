@@ -88,14 +88,19 @@ class NonStationaryGaussianNoise(GaussianNoise):
             U_inv = U.H
 
             V = U @ B_t @ U_inv
+            numpy.save('./V.npy', V)
         
             S1 = numpy.identity(N)
             S2 = numpy.identity(N)
             del U, U_inv, B_t
 
             S1_sqrt_inv, V_new = Simplifying_S1_and_S2_for_Woodbury(S1, S2, V)
+            numpy.save('./V_new.npy', V_new)
         
-            V_mxn, m = SVD_for_Woodbury(V_new)    
+            V_mxn, m = SVD_for_Woodbury(V_new)
+            numpy.save('./V_mxn.npy', V_mxn)
+            numpy.save('./m_and_N.npy', {'m':m, 'N':N})
+		
             
             V_mxn_H_times_n = V_mxn @ n
             loglikelihood = n.H @ n - V_mxn_H_times_n.H @ V_mxn_H_times_n
