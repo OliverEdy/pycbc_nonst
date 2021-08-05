@@ -18,35 +18,32 @@ from .gaussian_noise import GaussianNoise
 # parser.add_argument('--Sigma_Inverted', default=None, type=float)
 # args = parser.parse_args()
 # Sigma_Inverted_Loaded = args.threshold
-Sigma_Inverted_Loaded = numpy.identity(10)
 
-import os
-cwd = os.getcwd()
-print(cwd)
+V_matrix_loaded = numpy.mat(numpy.load('./V_mxn.npy', allow_pickle=True))
 
-'''
-Woodbury functions
-'''
-
-def Simplifying_S1_and_S2_for_Woodbury(A, C, V):
-    A_sqrt = numpy.sqrt(A)
-    A_sqrt_inv = numpy.mat(numpy.diag(1./numpy.diag(A_sqrt))) # Quick way to invert a diagonal matrix
-    C_sqrt = numpy.sqrt(C)
-    V_new = C_sqrt @ V @ A_sqrt_inv
-    return A_sqrt_inv, V_new
-
-def SVD_for_Woodbury(V, num_dec_places=5):
-    u, s, vT = scipy.linalg.svd(V)
-    s = s[numpy.around(s, num_dec_places) > 0]
-    m = s.shape[0]
-    vT = vT[0:m, :]
-    V_mxn = numpy.diag(s) @ vT
-    return V_mxn, m
-
-def Woodbury(A, U, V, m):
-    A_inv = numpy.diag(1./numpy.diag(A))
-    B_inv = numpy.linalg.inv(numpy.identity(m) + (V * A_inv) @ U)
-    return A_inv - (A_inv * U @ B_inv @ V * A_inv)
+# '''
+# Woodbury functions
+# '''
+# 
+# def Simplifying_S1_and_S2_for_Woodbury(A, C, V):
+#     A_sqrt = numpy.sqrt(A)
+#     A_sqrt_inv = numpy.mat(numpy.diag(1./numpy.diag(A_sqrt))) # Quick way to invert a diagonal matrix
+#     C_sqrt = numpy.sqrt(C)
+#     V_new = C_sqrt @ V @ A_sqrt_inv
+#     return A_sqrt_inv, V_new
+# 
+# def SVD_for_Woodbury(V, num_dec_places=5):
+#     u, s, vT = scipy.linalg.svd(V)
+#     s = s[numpy.around(s, num_dec_places) > 0]
+#     m = s.shape[0]
+#     vT = vT[0:m, :]
+#     V_mxn = numpy.diag(s) @ vT
+#     return V_mxn, m
+# 
+# def Woodbury(A, U, V, m):
+#     A_inv = numpy.diag(1./numpy.diag(A))
+#     B_inv = numpy.linalg.inv(numpy.identity(m) + (V * A_inv) @ U)
+#     return A_inv - (A_inv * U @ B_inv @ V * A_inv)
 
 '''
 Non-Stationary noise model
@@ -62,9 +59,11 @@ class NonStationaryGaussianNoise(GaussianNoise):
         # set up the boiler-plate attributes
         super(NonStationaryGaussianNoise, self).__init__(variable_params, data, low_frequency_cutoff, psds=psds,
             high_frequency_cutoff=high_frequency_cutoff, normalize=normalize,
-            static_params=static_params, **kwargs)
+            static_params=static_params, V_mxn=V_matrix_loaded, **kwargs)
 #         # load the non-stationary noise covariance
 #         self.nonstationary_noise_covariance = nonstationary_noise_covariance
+        # load the resized V matrix
+        self.V_mxn = V_mxn
         # use the non-stationary noise covariance for the loglikelihood
         self._loglikelihood = self._loglikelihood_nonst
 
@@ -74,38 +73,31 @@ class NonStationaryGaussianNoise(GaussianNoise):
 #         return ['loglr', 'lognl']
         
     def _loglikelihood_nonst(self):
+        V_mxn = self.V_mxn
         # Sigma_inv = self.nonstationary_noise_covariance
         
         det_logls = {}
         for (det, d) in self._data.items():
             n = numpy.mat(d).T
-            numpy.save('./n.npy', n)
-	
-            N = n.shape[0]
-            U = numpy.mat(Make_DFT(N))
-            numpy.save('./U.npy', U)
-            
-            B_t = numpy.mat(numpy.diag(d))#modulation))
-            numpy.save('./B.npy', B_t)
-            U_inv = U.H
 
-            V = U @ B_t @ U_inv
-            numpy.save('./V.npy', V)
-        
-            S1 = numpy.identity(N)
-            S2 = numpy.identity(N)
-            del U, U_inv, B_t
+#             N = n.shape[0]
+#             U = numpy.mat(Make_DFT(N))
+# 
+#             B_t = numpy.mat(numpy.diag(d))#modulation))
+#             U_inv = U.H
+# 
+#             V = U @ B_t @ U_inv
+# 
+#             S1 = numpy.identity(N)
+#             S2 = numpy.identity(N)
+#             del U, U_inv, B_t
+# 
+#             S1_sqrt_inv, V_new = Simplifying_S1_and_S2_for_Woodbury(S1, S2, V)
+# 
+#             V_mxn, m = SVD_for_Woodbury(V_new)
 
-            S1_sqrt_inv, V_new = Simplifying_S1_and_S2_for_Woodbury(S1, S2, V)
-            numpy.save('./V_new.npy', V_new)
-        
-            V_mxn, m = SVD_for_Woodbury(V_new)
-            numpy.save('./V_mxn.npy', V_mxn)
-            numpy.save('./m_and_N.npy', {'m':m, 'N':N})
-		
-            
-            V_mxn_H_times_n = V_mxn @ n
-            loglikelihood = n.H @ n - V_mxn_H_times_n.H @ V_mxn_H_times_n
+            V_mxn_times_n = V_mxn @ n
+            loglikelihood = n.H @ n - V_mxn_times_n.H @ V_mxn_times_n
             det_logls[det] = numpy.real(loglikelihood).tolist()[0][0]
                 
         logl = sum(det_logls.values())
