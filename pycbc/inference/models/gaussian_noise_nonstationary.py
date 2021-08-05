@@ -20,6 +20,10 @@ from .gaussian_noise import GaussianNoise
 # Sigma_Inverted_Loaded = args.threshold
 Sigma_Inverted_Loaded = numpy.identity(10)
 
+import os
+cwd = os.getcwd()
+print(cwd)
+
 '''
 Woodbury functions
 '''
@@ -75,7 +79,8 @@ class NonStationaryGaussianNoise(GaussianNoise):
         det_logls = {}
         for (det, d) in self._data.items():
             n = numpy.mat(d).T
-            numpy.save('~/Documents/Notebooks/PyCBC_Inference/Testing_Non-Stationarity/n.npy', n)
+            numpy.save(n.npy, n)
+	
             N = n.shape[0]
             U = numpy.mat(Make_DFT(N))
             
