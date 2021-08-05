@@ -10,7 +10,7 @@ import numpy
 import scipy
 from scipy.linalg import dft as Make_DFT
 import pycbc
-from pycbc.inference.models import GaussianNoise
+# from pycbc.inference.models import GaussianNoise
 from .gaussian_noise import GaussianNoise
 
 # # Parse command line arguments
@@ -75,6 +75,7 @@ class NonStationaryGaussianNoise(GaussianNoise):
         det_logls = {}
         for (det, d) in self._data.items():
             n = numpy.mat(d).T
+            numpy.save('~/Documents/Notebooks/PyCBC_Inference/Testing_Non-Stationarity/n.npy', n)
             N = n.shape[0]
             U = numpy.mat(Make_DFT(N))
             
