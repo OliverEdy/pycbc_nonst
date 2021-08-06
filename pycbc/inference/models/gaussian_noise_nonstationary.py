@@ -79,6 +79,7 @@ class NonStationaryGaussianNoise(GaussianNoise):
         det_logls = {}
         for (det, d) in self._data.items():
             n = numpy.mat(d).T
+            numpy.save('./data_dict.npy', {'d':d})
 
 #             N = n.shape[0]
 #             U = numpy.mat(Make_DFT(N))
