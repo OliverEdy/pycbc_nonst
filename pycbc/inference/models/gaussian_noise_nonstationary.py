@@ -59,11 +59,11 @@ class NonStationaryGaussianNoise(GaussianNoise):
         # set up the boiler-plate attributes
         super(NonStationaryGaussianNoise, self).__init__(variable_params, data, low_frequency_cutoff, psds=psds,
             high_frequency_cutoff=high_frequency_cutoff, normalize=normalize,
-            static_params=static_params, V_mxn=V_matrix_loaded, **kwargs)
+            static_params=static_params, **kwargs)
 #         # load the non-stationary noise covariance
 #         self.nonstationary_noise_covariance = nonstationary_noise_covariance
-        # load the resized V matrix
-        self.V_mxn = V_mxn
+#         # load the resized V matrix
+#         self.V_mxn = V_mxn
         # use the non-stationary noise covariance for the loglikelihood
         self._loglikelihood = self._loglikelihood_nonst
 
@@ -73,7 +73,7 @@ class NonStationaryGaussianNoise(GaussianNoise):
 #         return ['loglr', 'lognl']
         
     def _loglikelihood_nonst(self):
-        V_mxn = self.V_mxn
+#         V_mxn = self.V_mxn
         # Sigma_inv = self.nonstationary_noise_covariance
         
         det_logls = {}
