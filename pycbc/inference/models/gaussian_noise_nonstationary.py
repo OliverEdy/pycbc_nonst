@@ -19,7 +19,7 @@ from .gaussian_noise import GaussianNoise
 # args = parser.parse_args()
 # Sigma_Inverted_Loaded = args.threshold
 
-V_matrix_loaded = numpy.mat(numpy.load('./V_mxn.npy', allow_pickle=True))
+V_mxn = numpy.mat(numpy.load('./V_mxn.npy', allow_pickle=True))
 
 # '''
 # Woodbury functions
