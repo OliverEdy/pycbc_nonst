@@ -20,6 +20,7 @@ from .gaussian_noise import GaussianNoise
 # Sigma_Inverted_Loaded = args.threshold
 
 V_mxn = numpy.mat(numpy.load('./V_mxn.npy', allow_pickle=True))
+S1_sqrt_inv = numpy.mat(numpy.load('./S1_sqrt_inv', allow_pickle=True))
 
 # '''
 # Woodbury functions
@@ -79,7 +80,6 @@ class NonStationaryGaussianNoise(GaussianNoise):
         det_logls = {}
         for (det, d) in self._data.items():
             n = numpy.mat(d).T
-            numpy.save('./data_dict.npy', {'d':d, 'n':n})
 
 #             N = n.shape[0]
 #             U = numpy.mat(Make_DFT(N))
@@ -97,8 +97,8 @@ class NonStationaryGaussianNoise(GaussianNoise):
 # 
 #             V_mxn, m = SVD_for_Woodbury(V_new)
 
-            V_mxn_times_n = V_mxn @ n
-            loglikelihood = n.H @ n - V_mxn_times_n.H @ V_mxn_times_n
+            V_mxn_times_n = V_mxn @ S1_sqrt_inv @ n
+            loglikelihood = n.H @ (S1_sqrt_inv**2) @ n - V_mxn_times_n.H @ V_mxn_times_n
             det_logls[det] = numpy.real(loglikelihood).tolist()[0][0]
                 
         logl = sum(det_logls.values())
