@@ -97,8 +97,9 @@ class NonStationaryGaussianNoise(GaussianNoise):
 # 
 #             V_mxn, m = SVD_for_Woodbury(V_new)
 
-            V_mxn_times_n = V_mxn @ S1_sqrt_inv @ n
-            loglikelihood = n.H @ (S1_sqrt_inv**2) @ n - V_mxn_times_n.H @ V_mxn_times_n
+            S1_times_n = numpy.multiply(numpy.diag(S1_sqrt_inv)[:,None], n)
+            V_mxn_times_n = V_mxn @ S1_times_n
+            loglikelihood = S1_times_n.H @ S1_times_n - V_mxn_times_n.H @ V_mxn_times_n
             det_logls[det] = numpy.real(loglikelihood).tolist()[0][0]
                 
         logl = sum(det_logls.values())
