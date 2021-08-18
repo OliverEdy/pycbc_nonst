@@ -19,9 +19,6 @@ from .gaussian_noise import GaussianNoise
 # args = parser.parse_args()
 # Sigma_Inverted_Loaded = args.threshold
 
-V_mxn = numpy.mat(numpy.load('./V_mxn.npy', allow_pickle=True))
-S1_sqrt_inv = numpy.mat(numpy.load('./S1_sqrt_inv.npy', allow_pickle=True))
-
 # '''
 # Woodbury functions
 # '''
@@ -64,7 +61,8 @@ class NonStationaryGaussianNoise(GaussianNoise):
 #         # load the non-stationary noise covariance
 #         self.nonstationary_noise_covariance = nonstationary_noise_covariance
 #         # load the resized V matrix
-#         self.V_mxn = V_mxn
+        self.V_mxn = numpy.mat(numpy.load('./V_mxn.npy', allow_pickle=True))
+        self.S1_sqrt_inv = numpy.mat(numpy.load('./S1_sqrt_inv.npy', allow_pickle=True))
         # use the non-stationary noise covariance for the loglikelihood
         self._loglikelihood = self._loglikelihood_nonst
 
