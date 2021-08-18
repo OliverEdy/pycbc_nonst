@@ -72,7 +72,8 @@ class NonStationaryGaussianNoise(GaussianNoise):
 #         return ['loglr', 'lognl']
         
     def _loglikelihood_nonst(self):
-#         V_mxn = self.V_mxn
+        V_mxn = self.V_mxn
+        S1_sqrt_inv = self.S1_sqrt_inv
         # Sigma_inv = self.nonstationary_noise_covariance
         
         det_logls = {}
