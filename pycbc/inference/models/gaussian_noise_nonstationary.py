@@ -47,6 +47,9 @@ from .gaussian_noise import GaussianNoise
 Non-Stationary noise model
 '''
 
+test_dict = {}
+counter = 0
+
 class NonStationaryGaussianNoise(GaussianNoise):
 
     name = 'gaussian_noise_nonstationary'
@@ -102,6 +105,9 @@ class NonStationaryGaussianNoise(GaussianNoise):
             det_logls[det] = numpy.real(loglikelihood).tolist()[0][0]
                 
         logl = sum(det_logls.values())
+        test_dict[counter] = logl
+        numpy.save('./test_dict.npy', test_dict)
+        counter += 1
         # setattr(self._current_stats, 'loglikelihood', logl)
         self._current_stats.loglikelihood = logl
         return logl
