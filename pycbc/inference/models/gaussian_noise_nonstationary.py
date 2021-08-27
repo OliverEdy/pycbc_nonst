@@ -105,6 +105,7 @@ class NonStationaryGaussianNoise(GaussianNoise):
             det_logls[det] = numpy.real(loglikelihood).tolist()[0][0]
                 
         logl = sum(det_logls.values())
+        global counter
         test_dict[counter] = logl
         numpy.save('./test_dict.npy', test_dict)
         counter += 1
