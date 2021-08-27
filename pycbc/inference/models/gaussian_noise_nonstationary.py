@@ -73,6 +73,23 @@ class NonStationaryGaussianNoise(GaussianNoise):
 #     def _extra_stats(self):
 #         """Adds ``loglr`` and ``lognl`` to the ``default_stats``."""
 #         return ['loglr', 'lognl']
+    @property
+    def _extra_stats(self):
+        """Adds ``loglr``, plus ``cplx_loglr`` and ``optimal_snrsq`` in each
+        detector."""
+        return ['loglr', 'maxl_phase'] + \
+               ['{}_optimal_snrsq'.format(det) for det in self._data]
+
+    def _nowaveform_loglr(self):
+        """Convenience function to set loglr values if no waveform generated.
+        """
+        for det in self._data:
+            setattr(self._current_stats, 'loglikelihood', -numpy.inf)
+            setattr(self._current_stats, '{}_cplx_loglr'.format(det),
+                    -numpy.inf)
+            # snr can't be < 0 by definition, so return 0
+            setattr(self._current_stats, '{}_optimal_snrsq'.format(det), 0.)
+        return -numpy.inf
         
     def _loglikelihood_nonst(self):
         V_mxn = self.V_mxn
