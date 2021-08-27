@@ -81,6 +81,10 @@ class NonStationaryGaussianNoise(GaussianNoise):
         
         det_logls = {}
         for (det, d) in self._data.items():
+            try:
+                        pycbc.frame.write_frame("./test.gwf", "H1:TEST_UNITY", d)
+            except:
+                        numpy.save('./d.npy', d)
             n = numpy.mat(d).T
 
 #             N = n.shape[0]
