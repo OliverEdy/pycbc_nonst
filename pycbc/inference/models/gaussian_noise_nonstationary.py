@@ -247,10 +247,10 @@ class NonStationaryGaussianNoise(BaseGaussianNoise):
                 
                 # the inner products
                 # cplx_hd = self._whitened_data[det][slc].inner(h[slc])  # <h, d>
-                S1_times_d = numpy.multiply(numpy.diag(S1_sqrt_inv[kmin:kmax, kmin:kmax])[:,None], d_mat)
-                S1_times_h = numpy.multiply(numpy.diag(S1_sqrt_inv[kmin:kmax, kmin:kmax])[:,None], h_mat)
-                V_mxn_times_d = V_mxn[:, kmin:kmax] @ S1_times_d
-                V_mxn_times_h = V_mxn[:, kmin:kmax] @ S1_times_h
+                S1_times_d = numpy.multiply(numpy.diag(S1_sqrt_inv[slc, slc])[:,None], d_mat)
+                S1_times_h = numpy.multiply(numpy.diag(S1_sqrt_inv[slc, slc])[:,None], h_mat)
+                V_mxn_times_d = V_mxn[:, slc] @ S1_times_d
+                V_mxn_times_h = V_mxn[:, slc] @ S1_times_h
                 dh_as_a_matrix = S1_times_h.H @ S1_times_d - V_mxn_times_h.H @ V_mxn_times_d
                 cplx_dh = dh_as_a_matrix.tolist()[0][0]
                 
