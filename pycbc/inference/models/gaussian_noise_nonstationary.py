@@ -111,8 +111,8 @@ class NonStationaryGaussianNoise(BaseGaussianNoise):
             d = self._whitened_data[det]
             lognorm = self.det_lognorm(det)
             
-            S1_times_d = numpy.multiply(numpy.diag(S1_sqrt_inv)[:,None], numpy.mat(d[kmin:kmax]).T)
-            V_mxn_times_d = V_mxn @ S1_times_d
+            S1_times_d = numpy.multiply(numpy.diag(S1_sqrt_inv[kmin:kmax, kmin:kmax])[:,None], numpy.mat(d[kmin:kmax]).T)
+            V_mxn_times_d = V_mxn[:, kmin:kmax] @ S1_times_d
             dd_as_a_matrix = S1_times_d.H @ S1_times_d - V_mxn_times_d.H @ V_mxn_times_d
             dd = numpy.real(dd_as_a_matrix).tolist()[0][0]
             
@@ -247,10 +247,10 @@ class NonStationaryGaussianNoise(BaseGaussianNoise):
                 
                 # the inner products
                 # cplx_hd = self._whitened_data[det][slc].inner(h[slc])  # <h, d>
-                S1_times_d = numpy.multiply(numpy.diag(S1_sqrt_inv)[:,None], d_mat)
-                S1_times_h = numpy.multiply(numpy.diag(S1_sqrt_inv)[:,None], h_mat)
-                V_mxn_times_d = V_mxn @ S1_times_d
-                V_mxn_times_h = V_mxn @ S1_times_h
+                S1_times_d = numpy.multiply(numpy.diag(S1_sqrt_inv[kmin:kmax, kmin:kmax])[:,None], d_mat)
+                S1_times_h = numpy.multiply(numpy.diag(S1_sqrt_inv[kmin:kmax, kmin:kmax])[:,None], h_mat)
+                V_mxn_times_d = V_mxn[:, kmin:kmax] @ S1_times_d
+                V_mxn_times_h = V_mxn[:, kmin:kmax] @ S1_times_h
                 dh_as_a_matrix = S1_times_h.H @ S1_times_d - V_mxn_times_h.H @ V_mxn_times_d
                 cplx_dh = dh_as_a_matrix.tolist()[0][0]
                 
