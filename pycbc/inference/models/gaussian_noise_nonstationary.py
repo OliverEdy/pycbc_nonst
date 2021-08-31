@@ -19,6 +19,12 @@ from .gaussian_noise import BaseGaussianNoise, GaussianNoise
 # args = parser.parse_args()
 # Sigma_Inverted_Loaded = args.threshold
 
+try:
+    V_mxn = numpy.mat(numpy.load('./V_mxn.npy', allow_pickle=True))
+    S1_sqrt_inv = numpy.mat(numpy.load('./S1_sqrt_inv.npy', allow_pickle=True))
+except:
+    pass
+
 # '''
 # Woodbury functions
 # '''
@@ -67,8 +73,8 @@ class NonStationaryGaussianNoise(BaseGaussianNoise):
 #         # load the non-stationary noise covariance
 #         self.nonstationary_noise_covariance = nonstationary_noise_covariance
         # load the resized V matrix
-        self.V_mxn = numpy.mat(numpy.load('./V_mxn.npy', allow_pickle=True))
-        self.S1_sqrt_inv = numpy.mat(numpy.load('./S1_sqrt_inv.npy', allow_pickle=True))
+        # self.V_mxn = numpy.mat(numpy.load('./V_mxn.npy', allow_pickle=True))
+        # self.S1_sqrt_inv = numpy.mat(numpy.load('./S1_sqrt_inv.npy', allow_pickle=True))
 
 #     @property
 #     def _extra_stats(self):
@@ -94,8 +100,8 @@ class NonStationaryGaussianNoise(BaseGaussianNoise):
         float :
             The log likelihood of the noise in the requested detector.
         """
-        V_mxn = self.V_mxn
-        S1_sqrt_inv = self.S1_sqrt_inv
+        # V_mxn = self.V_mxn
+        # S1_sqrt_inv = self.S1_sqrt_inv
         try:
             return self._det_lognls[det]
         except KeyError:
@@ -212,8 +218,8 @@ class NonStationaryGaussianNoise(BaseGaussianNoise):
             The value of the log likelihood ratio.
         """
         params = self.current_params
-        V_mxn = self.V_mxn
-        S1_sqrt_inv = self.S1_sqrt_inv
+        # V_mxn = self.V_mxn
+        # S1_sqrt_inv = self.S1_sqrt_inv
         try:
             wfs = self.waveform_generator.generate(**params)
         except NoWaveformError:
