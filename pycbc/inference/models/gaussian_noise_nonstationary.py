@@ -94,6 +94,8 @@ class NonStationaryGaussianNoise(BaseGaussianNoise):
         float :
             The log likelihood of the noise in the requested detector.
         """
+        V_mxn = self.V_mxn
+        S1_sqrt_inv = self.S1_sqrt_inv
         try:
             return self._det_lognls[det]
         except KeyError:
@@ -210,6 +212,8 @@ class NonStationaryGaussianNoise(BaseGaussianNoise):
             The value of the log likelihood ratio.
         """
         params = self.current_params
+        V_mxn = self.V_mxn
+        S1_sqrt_inv = self.S1_sqrt_inv
         try:
             wfs = self.waveform_generator.generate(**params)
         except NoWaveformError:
