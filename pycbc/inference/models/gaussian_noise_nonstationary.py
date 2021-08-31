@@ -11,7 +11,7 @@ import scipy
 from scipy.linalg import dft as Make_DFT
 import pycbc
 # from pycbc.inference.models import GaussianNoise
-from .gaussian_noise import GaussianNoise
+from .gaussian_noise import BaseGaussianNoise, GaussianNoise
 
 # # Parse command line arguments
 # parser = ArgumentParser()
