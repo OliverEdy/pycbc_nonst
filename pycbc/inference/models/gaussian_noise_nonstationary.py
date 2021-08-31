@@ -236,21 +236,21 @@ class NonStationaryGaussianNoise(BaseGaussianNoise):
             if self._kmin[det] >= kmax:
                 # if the waveform terminates before the filtering low frequency
                 # cutoff, then the loglr is just 0 for this detector
-                cplx_hd = 0j
+                cplx_dh = 0j
                 hh = 0.
             else:
                 slc = slice(self._kmin[det], kmax)
                 # whiten the waveform
                 h[self._kmin[det]:kmax] *= self._weight[det][slc]
-                h_mat = numpy.mat(h).T
-                d_mat = numpy.mat(self._whitened_data[det][slc]).T
+                h_mat = numpy.mat(h)
+                d_mat = numpy.mat(self._whitened_data[det][slc])
                 
                 # the inner products
                 # cplx_hd = self._whitened_data[det][slc].inner(h[slc])  # <h, d>
-                S1_times_d = numpy.multiply(numpy.diag(S1_sqrt_inv[slc, slc])[:,None], d_mat)
-                S1_times_h = numpy.multiply(numpy.diag(S1_sqrt_inv[slc, slc])[:,None], h_mat)
-                V_mxn_times_d = V_mxn[:, slc] @ S1_times_d
-                V_mxn_times_h = V_mxn[:, slc] @ S1_times_h
+                S1_times_d = numpy.multiply(numpy.diag(S1_sqrt_inv)[:,None], d_mat)
+                S1_times_h = numpy.multiply(numpy.diag(S1_sqrt_inv)[:,None], h_mat)
+                V_mxn_times_d = V_mxn @ S1_times_d
+                V_mxn_times_h = V_mxn @ S1_times_h
                 dh_as_a_matrix = S1_times_h.H @ S1_times_d - V_mxn_times_h.H @ V_mxn_times_d
                 cplx_dh = dh_as_a_matrix.tolist()[0][0]
                 
