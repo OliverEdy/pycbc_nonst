@@ -256,7 +256,7 @@ class NonStationaryGaussianNoise(BaseGaussianNoise):
                 
                 # hh = h[slc].inner(h[slc]).real  # < h, h>
                 hh_as_a_matrix = S1_times_h.H @ S1_times_h - V_mxn_times_h.H @ V_mxn_times_h
-                cplx_hh = numpy.real(hh_as_a_matrix).tolist()[0][0]
+                hh = numpy.real(hh_as_a_matrix).tolist()[0][0]
                 
             cplx_loglr = cplx_hd - 0.5*hh
             # store
