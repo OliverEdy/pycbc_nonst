@@ -242,7 +242,7 @@ class NonStationaryGaussianNoise(BaseGaussianNoise):
                 slc = slice(self._kmin[det], kmax)
                 # whiten the waveform
                 h[self._kmin[det]:kmax] *= self._weight[det][slc]
-                h_mat = numpy.mat(h)
+                h_mat = numpy.mat(h[slc])
                 d_mat = numpy.mat(self._whitened_data[det][slc])
                 
                 # the inner products
