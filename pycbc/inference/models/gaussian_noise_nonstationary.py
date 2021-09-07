@@ -108,15 +108,15 @@ class NonStationaryGaussianNoise(BaseGaussianNoise):
             # hasn't been calculated yet; calculate & store
             kmin = self._kmin[det]
             kmax = self._kmax[det]
-            d = self._whitened_data[det]
+            d = self._whitened_data[det][kmin:kmax]
             lognorm = self.det_lognorm(det)
             
-            S1_times_d = numpy.multiply(numpy.diag(S1_sqrt_inv[kmin:kmax, kmin:kmax])[:,None], numpy.mat(d[kmin:kmax]).T)
+            S1_times_d = numpy.multiply(numpy.diag(S1_sqrt_inv[kmin:kmax, kmin:kmax])[:,None], numpy.mat(d).T)
             V_mxn_times_d = V_mxn[:, kmin:kmax] @ S1_times_d
             dd_as_a_matrix = S1_times_d.H @ S1_times_d - V_mxn_times_d.H @ V_mxn_times_d
             dd = numpy.real(dd_as_a_matrix).tolist()[0][0]
             
-            lognl = lognorm - 0.5 * dd#d[kmin:kmax].inner(d[kmin:kmax]).real
+            lognl = lognorm - 0.5 * dd#d.inner(d).real
             self._det_lognls[det] = lognl
             return self._det_lognls[det]
 
@@ -242,15 +242,15 @@ class NonStationaryGaussianNoise(BaseGaussianNoise):
                 slc = slice(self._kmin[det], kmax)
                 # whiten the waveform
                 h[self._kmin[det]:kmax] *= self._weight[det][slc]
-                h_mat = numpy.mat(h[slc])
-                d_mat = numpy.mat(self._whitened_data[det][slc])
+                h_mat = numpy.mat(h[slc]).T
+                d_mat = numpy.mat(self._whitened_data[det][slc]).T
                 
                 # the inner products
                 # cplx_hd = self._whitened_data[det][slc].inner(h[slc])  # <h, d>
-                S1_times_d = numpy.multiply(numpy.diag(S1_sqrt_inv)[:,None], d_mat)
-                S1_times_h = numpy.multiply(numpy.diag(S1_sqrt_inv)[:,None], h_mat)
-                V_mxn_times_d = V_mxn @ S1_times_d
-                V_mxn_times_h = V_mxn @ S1_times_h
+                S1_times_d = numpy.multiply(numpy.diag(S1_sqrt_inv[slc, slc])[:,None], d_mat)
+                S1_times_h = numpy.multiply(numpy.diag(S1_sqrt_inv[slc, slc])[:,None], h_mat)
+                V_mxn_times_d = V_mxn[:, slc] @ S1_times_d
+                V_mxn_times_h = V_mxn[:, slc] @ S1_times_h
                 hd_as_a_matrix = S1_times_h.H @ S1_times_d - V_mxn_times_h.H @ V_mxn_times_d
                 cplx_hd = hd_as_a_matrix.tolist()[0][0]
                 
