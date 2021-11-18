@@ -10,7 +10,6 @@ import numpy
 import scipy
 from scipy.linalg import dft as Make_DFT
 import pycbc
-# from pycbc.inference.models import GaussianNoise
 from .gaussian_noise import BaseGaussianNoise, GaussianNoise, create_waveform_generator
 
 # # Parse command line arguments
@@ -111,10 +110,8 @@ class NonStationaryGaussianNoise(BaseGaussianNoise):
             d = self._whitened_data[det][kmin:kmax]
             lognorm = self.det_lognorm(det)
             
-            S1_times_d = numpy.multiply(numpy.diag(S1_sqrt_inv[kmin:kmax, kmin:kmax])[:,None], numpy.mat(d).T)
-            V_mxn_times_d = numpy.mat(numpy.einsum('ij,jk->ik', V_mxn[:, kmin:kmax], S1_times_d))
-            dd_as_a_matrix = S1_times_d.H @ S1_times_d - V_mxn_times_d.H @ V_mxn_times_d
-            dd = numpy.real(dd_as_a_matrix).tolist()[0][0]
+            V_mxn_times_d = numpy.matmul(V_mxn[:, kmin:kmax], d)[:,numpy.newaxis]
+            dd = d.inner(d) - (V_mxn_times_d.conj().T @ V_mxn_times_d)[0][0]
             
             lognl = lognorm - 0.5 * dd#d.inner(d).real
             self._det_lognls[det] = lognl
@@ -245,18 +242,12 @@ class NonStationaryGaussianNoise(BaseGaussianNoise):
                 h_mat = numpy.mat(h[slc]).T
                 d_mat = numpy.mat(self._whitened_data[det][slc]).T
                 
-                # the inner products
-                # cplx_hd = self._whitened_data[det][slc].inner(h[slc])  # <h, d>
-                S1_times_d = numpy.multiply(numpy.diag(S1_sqrt_inv[slc, slc])[:,None], d_mat)
-                S1_times_h = numpy.multiply(numpy.diag(S1_sqrt_inv[slc, slc])[:,None], h_mat)
-                V_mxn_times_d = numpy.mat(numpy.einsum('ij,jk->ik', V_mxn[:, slc], S1_times_d))
-                V_mxn_times_h = numpy.mat(numpy.einsum('ij,jk->ik', V_mxn[:, slc], S1_times_h))
-                hd_as_a_matrix = S1_times_h.H @ S1_times_d - V_mxn_times_h.H @ V_mxn_times_d
-                cplx_hd = hd_as_a_matrix.tolist()[0][0]
+                # matrix multiplications
+                V_mxn_times_d = numpy.matmul(V_mxn[:, slc], d)[:,numpy.newaxis]
+                V_mxn_times_h = numpy.matmul(V_mxn[:, slc], h)[:,numpy.newaxis]
+                cplx_hd = d.inner(h) - (V_mxn_times_h.conj().T @ V_mxn_times_d)[0][0]
                 
-                # hh = h[slc].inner(h[slc]).real  # < h, h>
-                hh_as_a_matrix = S1_times_h.H @ S1_times_h - V_mxn_times_h.H @ V_mxn_times_h
-                hh = numpy.real(hh_as_a_matrix).tolist()[0][0]
+                hh = (h.inner(h) - (V_mxn_times_h.conj().T @ V_mxn_times_h)[0][0]).real
                 
             cplx_loglr = cplx_hd - 0.5*hh
             # store
