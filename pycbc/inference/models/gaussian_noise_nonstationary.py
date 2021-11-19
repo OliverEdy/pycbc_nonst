@@ -19,8 +19,8 @@ from .gaussian_noise import BaseGaussianNoise, GaussianNoise, create_waveform_ge
 # Sigma_Inverted_Loaded = args.threshold
 
 try:
-    V_mxn = numpy.mat(numpy.load('./V_mxn.npy', allow_pickle=True))
-    S1_sqrt_inv = numpy.mat(numpy.load('./S1_sqrt_inv.npy', allow_pickle=True))
+    V_mxn = numpy.load('./V_mxn.npy', allow_pickle=True)
+    S1_sqrt_inv = numpy.load('./S1_sqrt_inv.npy', allow_pickle=True)
 except:
     pass
 
