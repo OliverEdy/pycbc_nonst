@@ -247,7 +247,7 @@ class NonStationaryGaussianNoise(BaseGaussianNoise):
                 V_mxn_times_h = numpy.matmul(V_mxn[:, slc], h)[:,numpy.newaxis]
                 cplx_hd = d.inner(h) - (V_mxn_times_h.conj().T @ V_mxn_times_d)[0][0]
                 
-                hh = (h.inner(h) - (V_mxn_times_h.conj().T @ V_mxn_times_h)[0][0]).real
+                hh = (h.inner(h)).real# - (V_mxn_times_h.conj().T @ V_mxn_times_h)[0][0]).real
                 
             cplx_loglr = cplx_hd - 0.5*hh
             # store
