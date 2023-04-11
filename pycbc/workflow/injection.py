@@ -24,16 +24,20 @@
 """
 This module is responsible for setting up the part of a pycbc workflow that
 will generate the injection files to be used for assessing the workflow's
-ability to detect predicted signals. (In ihope parlance, this sets up the
-inspinj jobs). Full documentation for this module can be found here:
+ability to detect predicted signals.
+Full documentation for this module can be found here:
 https://ldas-jobs.ligo.caltech.edu/~cbc/docs/pycbc/NOTYETCREATED.html
 """
 
-import logging, urllib, urlparse
-from pycbc.workflow.core import File, FileList, make_analysis_dir, Executable, resolve_url
+import logging
+import os.path
+import configparser as ConfigParser
+from pycbc.workflow.core import FileList, make_analysis_dir, Node
+from pycbc.workflow.core import Executable, resolve_url_to_file
 from pycbc.workflow.jobsetup import (LalappsInspinjExecutable,
         LigolwCBCJitterSkylocExecutable, LigolwCBCAlignTotalSpinExecutable,
-        PycbcDarkVsBrightInjectionsExecutable)
+        PycbcDarkVsBrightInjectionsExecutable, select_generic_executable,
+        PycbcCreateInjectionsExecutable)
 
 def veto_injections(workflow, inj_file, veto_file, veto_name, out_dir, tags=None):
     tags = [] if tags is None else tags
@@ -49,19 +53,88 @@ def veto_injections(workflow, inj_file, veto_file, veto_name, out_dir, tags=None
     workflow += node
     return node.output_files[0]
 
+
+class PyCBCOptimalSNRExecutable(Executable):
+    """Compute optimal SNR for injections"""
+    current_retention_level = Executable.ALL_TRIGGERS
+
+    def create_node(self, workflow, inj_file, precalc_psd_files, group_str):
+        node = Node(self)
+        _, ext = os.path.splitext(inj_file.name)
+        node.add_input_opt('--input-file', inj_file)
+        node.add_opt('--injection-fraction-range', group_str)
+        node.add_input_list_opt('--time-varying-psds', precalc_psd_files)
+        node.new_output_file_opt(workflow.analysis_time, ext,
+                                 '--output-file')
+        return node
+
+
+class PyCBCMergeHDFExecutable(Executable):
+    """Merge HDF injection files executable class"""
+    current_retention_level = Executable.MERGED_TRIGGERS
+
+    def create_node(self, workflow, input_files):
+        node = Node(self)
+        node.add_input_list_opt('--injection-files', input_files)
+        node.new_output_file_opt(workflow.analysis_time, '.hdf',
+                                 '--output-file')
+        return node
+
+
 def compute_inj_optimal_snr(workflow, inj_file, precalc_psd_files, out_dir,
                             tags=None):
     "Set up a job for computing optimal SNRs of a sim_inspiral file."
     if tags is None:
         tags = []
 
-    node = Executable(workflow.cp, 'optimal_snr', ifos=workflow.ifos,
-                      out_dir=out_dir, tags=tags).create_node()
-    node.add_input_opt('--input-file', inj_file)
-    node.add_input_list_opt('--time-varying-psds', precalc_psd_files)
-    node.new_output_file_opt(workflow.analysis_time, '.xml', '--output-file')
-    workflow += node
-    return node.output_files[0]
+    try:
+        factor = int(workflow.cp.get_opt_tags('workflow-optimal-snr',
+                                              'parallelization-factor',
+                                              tags))
+    except Exception as e:
+        logging.warning(e)
+        factor = 1
+
+    if factor == 1:
+        # parallelization factor not given - default to single optimal snr job
+        opt_snr_exe = PyCBCOptimalSNRExecutable(workflow.cp, 'optimal_snr',
+                                                ifos=workflow.ifos,
+                                                out_dir=out_dir, tags=tags)
+        node = opt_snr_exe.create_node(workflow, inj_file,
+                                       precalc_psd_files, '0/1')
+        workflow += node
+
+        return node.output_files[0]
+
+    opt_snr_split_files = []
+    for i in range(factor):
+        group_str = '%s/%s' % (i, factor)
+        opt_snr_exe = PyCBCOptimalSNRExecutable(workflow.cp, 'optimal_snr',
+                                                ifos=workflow.ifos,
+                                                out_dir=out_dir,
+                                                tags=tags + [str(i)])
+        opt_snr_exe.update_current_retention_level(
+            Executable.INTERMEDIATE_PRODUCT)
+        node = opt_snr_exe.create_node(workflow, inj_file, precalc_psd_files,
+                                       group_str)
+        opt_snr_split_files += [node.output_files[0]]
+        workflow += node
+
+    hdfcombine_exe = PyCBCMergeHDFExecutable(
+        workflow.cp,
+        'optimal_snr_merge',
+        ifos=workflow.ifos,
+        out_dir=out_dir,
+        tags=tags
+    )
+
+    hdfcombine_node = hdfcombine_exe.create_node(
+        workflow,
+        opt_snr_split_files
+    )
+    workflow += hdfcombine_node
+
+    return hdfcombine_node.output_files[0]
 
 def cut_distant_injections(workflow, inj_file, out_dir, tags=None):
     "Set up a job for removing injections that are too distant to be seen"
@@ -74,6 +147,23 @@ def cut_distant_injections(workflow, inj_file, out_dir, tags=None):
     node.new_output_file_opt(workflow.analysis_time, '.xml', '--output-file')
     workflow += node
     return node.output_files[0]
+
+def inj_to_hdf(workflow, inj_file, out_dir, tags=None):
+    """ Convert injection file to hdf format if not already one
+    """
+    _, ext = os.path.splitext(inj_file.name)
+    if ext == '.hdf':
+        return inj_file
+
+    if tags is None:
+        tags = []
+
+    node = Executable(workflow.cp, 'inj2hdf', ifos=workflow.ifos,
+                      out_dir=out_dir, tags=tags).create_node()
+    node.add_input_opt('--injection-file', inj_file)
+    node.new_output_file_opt(workflow.analysis_time, '.hdf', '--output-file')
+    workflow += node
+    return node.output_file
 
 def setup_injection_workflow(workflow, output_dir=None,
                              inj_section_name='injections', exttrig_file=None,
@@ -127,25 +217,23 @@ def setup_injection_workflow(workflow, output_dir=None,
         inj_tag = section.upper()
         curr_tags = tags + [inj_tag]
 
-        # FIXME: Remove once fixed in pipedown
-        # TEMPORARILY we require inj tags to end in "INJ"
-        if not inj_tag.endswith("INJ"):
-            err_msg = "Currently workflow requires injection names to end with "
-            err_msg += "a inj suffix. Ie. bnslininj or bbhinj. "
-            err_msg += "%s is not good." %(inj_tag.lower())
-            raise ValueError(err_msg)
-
         # Parse for options in ini file
         injection_method = workflow.cp.get_opt_tags("workflow-injections",
                                                     "injections-method",
                                                     curr_tags)
 
         if injection_method in ["IN_WORKFLOW", "AT_RUNTIME"]:
-            # FIXME: Add ability to specify different exes
-            inj_job = LalappsInspinjExecutable(workflow.cp, inj_section_name,
-                                               out_dir=output_dir, ifos='HL',
-                                               tags=curr_tags)
-            node = inj_job.create_node(full_segment)
+            exe = select_generic_executable(workflow, 'injections')
+            inj_job = exe(workflow.cp, inj_section_name,
+                          out_dir=output_dir, ifos='HL',
+                          tags=curr_tags)
+            if exe is PycbcCreateInjectionsExecutable:
+                config_url = workflow.cp.get('workflow-injections',
+                                             section+'-config-file')
+                config_file = resolve_url_to_file(config_url)
+                node, inj_file = inj_job.create_node(config_file)
+            else:
+                node = inj_job.create_node(full_segment)
             if injection_method == "AT_RUNTIME":
                 workflow.execute_node(node)
             else:
@@ -153,15 +241,18 @@ def setup_injection_workflow(workflow, output_dir=None,
             inj_file = node.output_files[0]
             inj_files.append(inj_file)
         elif injection_method == "PREGENERATED":
-            injectionFilePath = workflow.cp.get_opt_tags("workflow-injections",
-                                      "injections-pregenerated-file", curr_tags)
-            injectionFilePath = resolve_url(injectionFilePath)
-            file_url = urlparse.urljoin('file:',
-                                        urllib.pathname2url(injectionFilePath))
-            inj_file = File('HL', 'PREGEN_inj_file', full_segment, file_url,
-                            tags=curr_tags)
-            inj_file.PFN(injectionFilePath, site='local')
-            inj_files.append(inj_file)
+            file_attrs = {
+                'ifos': ['HL'],
+                'segs': full_segment,
+                'tags': curr_tags
+            }
+            injection_path = workflow.cp.get_opt_tags(
+                "workflow-injections",
+                "injections-pregenerated-file",
+                curr_tags
+            )
+            curr_file = resolve_url_to_file(injection_path, attrs=file_attrs)
+            inj_files.append(curr_file)
         elif injection_method in ["IN_COH_PTF_WORKFLOW", "AT_COH_PTF_RUNTIME"]:
             inj_job = LalappsInspinjExecutable(workflow.cp, inj_section_name,
                                                out_dir=output_dir, ifos=ifos,
@@ -226,4 +317,3 @@ def setup_injection_workflow(workflow, output_dir=None,
 
     logging.info("Leaving injection module.")
     return inj_files, inj_tags
-

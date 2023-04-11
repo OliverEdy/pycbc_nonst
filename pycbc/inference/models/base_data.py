@@ -22,16 +22,15 @@
 # =============================================================================
 #
 
-"""Base classes for models with data.
+"""Base classes for mofdels with data.
 """
 
 import numpy
 from abc import (ABCMeta, abstractmethod)
-
 from .base import BaseModel
 
 
-class BaseDataModel(BaseModel):
+class BaseDataModel(BaseModel, metaclass=ABCMeta):
     r"""Base class for models that require data and a waveform generator.
 
     This adds propeties for the log of the likelihood that the data contain
@@ -54,36 +53,31 @@ class BaseDataModel(BaseModel):
     gates : dict of tuples, optional
         Dictionary of detectors -> tuples of specifying gate times. The
         sort of thing returned by `pycbc.gate.gates_from_cli`.
+    injection_file : str, optional
+        If an injection was added to the data, the name of the injection file
+        used. If provided, the injection parameters will be written to
+        file when ``write_metadata`` is called.
 
     \**kwargs :
         All other keyword arguments are passed to ``BaseModel``.
 
-    Attributes
-    ----------
-    data : dict
-        The data that the class was initialized with.
-    lognl :
-        Returns the log likelihood of the noise.
-    loglr :
-        Returns the log of the likelihood ratio.
-    logplr :
-        Returns the log of the prior-weighted likelihood ratio.
 
     See ``BaseModel`` for additional attributes and properties.
     """
-    __metaclass__ = ABCMeta
 
     def __init__(self, variable_params, data, recalibration=None, gates=None,
-                 **kwargs):
+                 injection_file=None, no_save_data=False, **kwargs):
         self._data = None
         self.data = data
         self.recalibration = recalibration
+        self.no_save_data = no_save_data
         self.gates = gates
+        self.injection_file = injection_file
         super(BaseDataModel, self).__init__(variable_params, **kwargs)
 
     @property
     def data(self):
-        """Dictionary mapping detector names to data."""
+        """dict: Dictionary mapping detector names to data."""
         return self._data
 
     @data.setter
@@ -119,7 +113,7 @@ class BaseDataModel(BaseModel):
         If that raises an ``AttributeError``, will call `_loglr`` to
         calculate it and store it to ``current_stats``.
         """
-        return self._trytoget('loglr', self._loglr)
+        return self._trytoget('loglr', self._loglr, apply_transforms=True)
 
     @abstractmethod
     def _loglr(self):
@@ -143,16 +137,24 @@ class BaseDataModel(BaseModel):
 
     @property
     def detectors(self):
-        """Returns the detectors used."""
-        return self._data.keys()
+        """list: Returns the detectors used."""
+        return list(self._data.keys())
 
-    def write_metadata(self, fp):
+    def write_metadata(self, fp, group=None):
         """Adds data to the metadata that's written.
 
         Parameters
         ----------
         fp : pycbc.inference.io.BaseInferenceFile instance
             The inference file to write to.
+        group : str, optional
+            If provided, the metadata will be written to the attrs specified
+            by group, i.e., to ``fp[group].attrs``. Otherwise, metadata is
+            written to the top-level attrs (``fp.attrs``).
         """
-        super(BaseDataModel, self).write_metadata(fp)
-        fp.write_stilde(self.data)
+        super().write_metadata(fp, group=group)
+        if not self.no_save_data:
+            fp.write_stilde(self.data, group=group)
+        # save injection parameters
+        if self.injection_file is not None:
+            fp.write_injections(self.injection_file, group=group)

@@ -32,17 +32,19 @@ import sys
 
 import numpy
 
+import matplotlib
 from matplotlib import (patches, use)
 
 import pycbc
 import pycbc.version
+from pycbc.results.plot import (add_style_opt_to_parser, set_style_from_cli)
 from pycbc.results import metadata
-
+from pycbc.io import FieldArray
 from pycbc import __version__
 from pycbc import conversions
 from pycbc.workflow import WorkflowConfigParser
 from pycbc.inference import (option_utils, io)
-from pycbc import transforms
+from pycbc.distributions.utils import prior_from_config
 
 from pycbc.results.scatter_histograms import create_multidim_plot
 
@@ -69,17 +71,54 @@ option_utils.add_plot_posterior_option_group(parser)
 option_utils.add_scatter_option_group(parser)
 # density configuration
 option_utils.add_density_option_group(parser)
+parser.add_argument("--plot-maxl", action="store_true", default=False,
+                    help="Put a marker on the 2D marginal where the maxL "
+                         "point is.")
+parser.add_argument('--legend-location', default='upper right',
+                    help='Where to put the legend (if multiple files are '
+                         'provided). Default is "upper right".')
 parser.add_argument('--dpi', type=int, default=200,
                     help="Set the DPI of the plot. Default is 200.")
+# style option
+add_style_opt_to_parser(parser)
 
 # parse command line
 opts = parser.parse_args()
+
+# set mpl style
+set_style_from_cli(opts)
+
+# get any kdeargs; we'll always pass through the kde max samples
+kdeargs = {'max_kde_samples': opts.max_kde_samples}
+# add any other options that were specified
+if opts.kde_args is not None:
+    for opt in opts.kde_args:
+        opt, val = opt.split(':')
+        try:
+            val = float(val)
+            # convert to int if no remainder
+            if val % 1 == 0:
+                val = int(val)
+        except TypeError:
+            pass
+        kdeargs[opt] = val
+
+if opts.plot_maxl:
+    # add loglikelihood to list of parameters
+    add_logl = 'loglikelihood' not in opts.parameters
+    if add_logl:
+        opts.parameters.append('loglikelihood')
+else:
+    add_logl = False
 
 # set logging
 pycbc.init_logging(opts.verbose)
 
 # load the samples
 fps, parameters, labels, samples = io.results_from_cli(opts)
+
+if add_logl:
+    parameters = [p for p in parameters if p != 'loglikelihood']
 
 # typecast to list so the input files can be iterated over
 fps = fps if isinstance(fps, list) else [fps]
@@ -100,10 +139,6 @@ if opts.z_arg is not None:
 else:
     zvals = None
     zlbl = None
-
-# closet the files, we don't need them anymore
-for fp in fps:
-    fp.close()
 
 # if no plotting options selected, then the default options are based
 # on the number of parameters
@@ -127,13 +162,25 @@ if opts.plot_prior is not None:
                          "--plot-prior")
     logging.info("Loading prior")
     cp = WorkflowConfigParser(opts.plot_prior)
-    prior = option_utils.prior_from_config(cp)
+    prior = prior_from_config(cp)
     logging.info("Drawing samples from prior")
     prior_samples = prior.rvs(opts.prior_nsamples)
-    _, ts = transforms.get_common_cbc_transforms(
-        opts.parameters, prior_samples.fieldnames)
-    # add parameters not included in file
-    prior_samples = transforms.apply_transforms(prior_samples, ts)
+    # we'll just use the first file for metadata
+    fp = fps[0]
+    # add the static params
+    for param in fp.attrs['static_params']:
+        setattr(prior_samples, param, fp.attrs[param])
+    # remap any parameters
+    if 'remapped_params' in fp.attrs:
+        remapped_params = {}
+        for func, param in fp.attrs['remapped_params']:
+            try:
+                remapped_params[param] = prior_samples[func]
+            except (NameError, TypeError, AttributeError):
+                continue
+        prior_samples = FieldArray.from_kwargs(**remapped_params)
+        for param in fp.attrs['static_params']:
+            setattr(prior_samples, param, fp.attrs[param])
 
 # get minimum and maximum ranges for each parameter from command line
 mins, maxs = option_utils.plot_ranges_from_cli(opts)
@@ -149,28 +196,56 @@ for p in parameters:
 expected_parameters = {}
 if opts.plot_injection_parameters:
     injections = io.injections_from_cli(opts)
+
+    if opts.pick_injection_by_time:
+        if 'tc' not in injections:
+            raise ValueError("Couldn't determine injection time, tried tc")
+
+        inj_time = injections['tc']
+
+        if 'tc' in samples[0]:
+            pos_time = samples[0]['tc'].mean()
+        elif 'trigger_time' in fps[0].attrs:
+            pos_time = fps[0].attrs['trigger_time']
+        elif 'tc_ref' in fps[0].attrs:
+            pos_time = fps[0].attrs['tc_ref']
+        else:
+            raise ValueError("Couldn't find posterior time, "
+                             "tried tc, tc_ref, and trigger_time attribute")
+        pick = abs(inj_time - pos_time).argmin()
+
     for p in parameters:
-        # check that all of the injections are the same
         try:
             vals = injections[p]
-        except NameError:
+        except (NameError, TypeError, AttributeError):
             # injection doesn't have this parameter, skip
             logging.warn("Could not find injection parameter {}".format(p))
             continue
-        unique_vals = numpy.unique(vals)
-        if unique_vals.size != 1:
-            raise ValueError("More than one injection found! To use "
-                "plot-injection-parameters, there must be a single unique "
-                "injection in all input files. Use the expected-parameters "
-                "option to specify an expected parameter instead.")
-        # passed: use the value for the expected
-        expected_parameters[p] = unique_vals[0]
+
+        if opts.pick_injection_by_time:
+            expected_parameters[p] = injections[p][pick]
+        else:
+            # check that all of the injections are the same
+            unique_vals = numpy.unique(vals)
+            if unique_vals.size != 1:
+                raise ValueError("More than one injection found! To use "
+                    "plot-injection-parameters, there must be a single unique "
+                    "injection in all input files. Use the expected-parameters"
+                    " option to specify an expected parameter instead.")
+
+            # passed: use the value for the expected
+            expected_parameters[p] = unique_vals[0]
+
+# close the files, we don't need them anymore
+for fp in fps:
+    fp.close()
 
 # get expected parameter values from command line
 expected_parameters.update(option_utils.expected_parameters_from_cli(opts))
 
-# assign some colors
-colors = itertools.cycle(["black"] + ["C{}".format(i) for i in range(10)])
+# get the color cycle to use
+color_cycle = [c['color'] for c in matplotlib.rcParams['axes.prop_cycle']]
+colors = itertools.cycle(color_cycle)
 
 # plot each input file
 logging.info("Plotting")
@@ -182,25 +257,43 @@ for (i, s) in enumerate(samples):
         fig = None
         axis_dict = None
 
-    # loop over some contour colors
-    contour_color = colors.next() if not opts.contour_color \
-                                                else opts.contour_color
+    # get a default line color; this is used for the 1D marginal lines
+    linecolor = next(colors)
+    # set different colors depending on if one or more files was provided
+    if len(opts.input_file) == 1:
+        # make the hist color black or white, depending on if dark background
+        # is used
+        if opts.mpl_style == 'dark_background':
+            hist_color = 'white'
+        else:
+            hist_color = 'black'
+        # make histograms filled if only one input file to plot
+        fill_color = 'gray'
+        # make the default contour color white if plot density is on
+        if not opts.contour_color and opts.plot_density:
+            contour_color = 'white'
+        # otherwise, make the default be the same as the hist color
+        elif not opts.contour_color:
+            contour_color = hist_color
+        else:
+            contour_color = opts.contour_color
+    else:
+        # don't fill in the histograms
+        fill_color = None
+        # make the contour and hist colors the same as the 1D marginal lines
+        contour_color = hist_color = linecolor
 
-    # make histograms filled if only one input file to plot
-    fill_color = "gray" if len(opts.input_file) == 1 else None
-
-    # make histogram black lines if only one
-    hist_color = "black" if len(opts.input_file) == 1 else contour_color
+    # save the hist color for the legend, in the case of multiple files
     hist_colors.append(hist_color)
-
-    # pick a new color for each input file
-    linecolor = "navy" if len(opts.input_file) == 1 else contour_color
 
     # plot
     fig, axis_dict = create_multidim_plot(
                     parameters, s, labels=labels, fig=fig, axis_dict=axis_dict,
                     plot_marginal=opts.plot_marginal,
+                    plot_marginal_lines=not opts.no_marginal_lines,
+                    plot_maxl=opts.plot_maxl,
                     marginal_percentiles=opts.marginal_percentiles,
+                    marginal_title=not opts.no_marginal_titles,
                     plot_scatter=opts.plot_scatter,
                     zvals=zvals[i] if zvals is not None else None,
                     show_colorbar=opts.z_arg is not None,
@@ -212,10 +305,13 @@ for (i, s) in enumerate(samples):
                     contour_percentiles=opts.contour_percentiles,
                     density_cmap=opts.density_cmap,
                     contour_color=contour_color,
+                    contour_linestyles=opts.contour_linestyles,
+                    label_contours=not opts.no_contour_labels,
                     hist_color=hist_color,
                     line_color=linecolor,
                     fill_color=fill_color,
                     use_kombine=opts.use_kombine_kde,
+                    kdeargs=kdeargs,
                     mins=mins, maxs=maxs,
                     expected_parameters=expected_parameters,
                     expected_parameters_color=opts.expected_parameters_color)
@@ -223,7 +319,7 @@ for (i, s) in enumerate(samples):
 # plot the prior
 if opts.plot_prior:
     if len(opts.input_file) > 1:
-        hist_color = colors.next()
+        hist_color = next(colors)
     fig, axis_dict = create_multidim_plot(
         parameters, prior_samples, fig=fig, axis_dict=axis_dict,
         labels=labels, plot_marginal=True, marginal_percentiles=[],
@@ -241,18 +337,25 @@ if len(opts.input_file) > 1:
         label = opts.input_file_labels[fn]
         handles.append(patches.Patch(color=color, label=label))
         labels.append(label)
-    fig.legend(loc="upper right", handles=handles,
-               labels=labels)
+    if len(parameters) == 2:
+        addto = axis_dict[parameters[0], parameters[1]][0]
+    elif len(parameters) == 1:
+        addto = axis_dict[parameters[0], parameters[0]][0]
+    else:
+        addto = fig
+    addto.legend(loc=opts.legend_location, handles=handles,
+                 labels=labels)
 
 # set DPI
 fig.set_dpi(opts.dpi)
 
 # save
 metadata.save_fig_with_metadata(
-                 fig, opts.output_file, {},
+                 fig, opts.output_file,
                  cmd=" ".join(sys.argv),
                  title="Posteriors",
-                 caption="Posterior probability density functions.")
+                 caption="Posterior probability density functions.",
+                 fig_kwds={'bbox_inches': 'tight'})
 
 # finish
 logging.info("Done")

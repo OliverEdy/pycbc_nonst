@@ -25,11 +25,8 @@
 These are the unittests for the data quality query methods in pycbc
 """
 import unittest
-import numpy
 from utils import simple_exit
 from pycbc.dq import query_flag, query_cumulative_flags, query_str
-from pycbc.workflow.segment import get_segments_file
-from pycbc.workflow import Workflow
 
 
 class TestDataQualityFlags(unittest.TestCase):
@@ -92,8 +89,10 @@ class TestDataQualityFlags(unittest.TestCase):
 
         d1 = query_str('H1', '+data', 1126051217, 1126051217 + 100000)
         d2 = query_str('H1', '+H1:data', 1126051217, 1126051217 + 100000)
-        d3 = query_str('H1', '+data:1', 1126051217, 1126051217 + 100000)
-        d4 = query_str('H1', '+data<0:0>[1126051217:1127051217]', 1126051217, 1126051217 + 100000)
+        d3 = query_str('H1', '+data[1126051217:1127051217]',
+                       1126051217, 1126051217 + 100000)
+        d4 = query_str('H1', '+data<0:0>[1126051217:1127051217]',
+                       1126051217, 1126051217 + 100000)
 
         self.assertTrue(abs(d - d1) == 0)
         self.assertTrue(abs(d - d2) == 0)

@@ -14,7 +14,7 @@ workflow.
 
 This module is designed to be able to support multiple ways of obtaining
 data (different codes/interfaces whatever). Currently we only support datafind
-through the glue.datafind module (which is equivalent to using gw_data_find).
+through the `gwdatafind` module (which is equivalent to using gw_data_find).
 
 This module will run the necessary queries to the datafind server to obtain
 locations for frame files at the specfied times for each interferometer.
@@ -35,11 +35,6 @@ Using this module requires a number of things
 * A configuration file (or files) containing the information needed to tell this module how to generate the segments (described below).
 * An initialized instance of the pycbc workflow class, containing the ConfigParser.
 * An ifo-keyed dictionary of ligo.segments.segmentlist instances containing the times that should be analysed for each ifo. See :ref:`workflowsegmentsmod` for documentation of the segments module, which in most cases should be used to obtain this input.
-
-The module is then called according to
-
-.. autofunction:: pycbc.workflow.setup_segment_generation
-       :noindex:
 
 -------------------------
 Configuration file setup
@@ -122,7 +117,7 @@ $$$$$$$$$$$$$$$
 $$$$$$$$$$$$$$$
 
 Currently no executables are needed in the datafind section. Workflow will use
-the glue.datafind module to run the calls to the datafind server.
+the `gwdatafind` module to run the calls to the datafind server.
 
 $$$$$$$$$$$$$$$$$$$
 Other sections

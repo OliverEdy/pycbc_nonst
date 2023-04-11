@@ -89,9 +89,15 @@ def create_descriptor(size, idtype, odtype, inplace):
         lib.DftiSetValue(desc, DFTI_PLACEMENT, DFTI_INPLACE)
     else:
         lib.DftiSetValue(desc, DFTI_PLACEMENT, DFTI_NOT_INPLACE)
+
+    nthreads = _scheme.mgr.state.num_threads
+    status = lib.DftiSetValue(desc, DFTI_THREAD_LIMIT, nthreads)
+    check_status(status)
+
     lib.DftiSetValue(desc, DFTI_CONJUGATE_EVEN_STORAGE, DFTI_CCS_FORMAT)
     lib.DftiCommitDescriptor(desc)
     check_status(status)
+
     return desc
 
 def fft(invec, outvec, prec, itype, otype):
@@ -121,7 +127,8 @@ def _get_desc(fftobj):
     desc = ctypes.c_void_p(1)
     prec = mkl_prec[fftobj.invec.precision]
     domain = mkl_domain[str(fftobj.invec.kind)][str(fftobj.outvec.kind)]
-    status = _create_descr(ctypes.byref(desc), prec, domain, 1, fftobj.size)
+    status = _create_descr(ctypes.byref(desc), prec, domain,
+                           1, int(fftobj.size))
     check_status(status)
     # Now we set various things depending on exactly what kind of transform we're
     # performing.

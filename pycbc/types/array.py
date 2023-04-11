@@ -25,14 +25,13 @@
 """
 This modules provides a device independent Array class based on PyCUDA and Numpy.
 """
-from __future__ import division
 
 BACKEND_PREFIX="pycbc.types.array_"
 
 import h5py
 import os as _os
 
-from decorator import decorator
+from functools import wraps
 
 import lal as _lal
 import numpy as _numpy
@@ -41,14 +40,13 @@ from numpy.linalg import norm
 
 import pycbc.scheme as _scheme
 from pycbc.scheme import schemed, cpuonly
-from pycbc.types.aligned import ArrayWithAligned
 from pycbc.opt import LimitedSizeDict
 
 #! FIXME: the uint32 datatype has not been fully tested,
 # we should restrict any functions that do not allow an
 # array of uint32 integers
 _ALLOWED_DTYPES = [_numpy.float32, _numpy.float64, _numpy.complex64,
-                   _numpy.complex128, _numpy.uint32, _numpy.int32, _numpy.int]
+                   _numpy.complex128, _numpy.uint32, _numpy.int32, int]
 try:
     _ALLOWED_SCALARS = [int, long, float, complex] + _ALLOWED_DTYPES
 except NameError:
@@ -60,41 +58,46 @@ def _convert_to_scheme(ary):
         ary._data = converted_array._data
         ary._scheme = _scheme.mgr.state
       
-@decorator  
-def _convert(fn, self, *args):
-    # Convert this array to the current processing scheme
-    _convert_to_scheme(self)
-    return fn(self, *args)
+def _convert(func):
+    @wraps(func)
+    def convert(self, *args, **kwargs):
+        _convert_to_scheme(self)
+        return func(self, *args, **kwargs)
+    return convert
     
-@decorator
-def _nocomplex(fn, self, *args):
-    if self.kind == 'real':
-        return fn(self, *args)
-    else:
-        raise TypeError( fn.__name__ + " does not support complex types")
-        
-@decorator
-def _noreal(fn, self, *args):
-    if self.kind == 'complex':
-        return fn(self, *args)
-    else:
-        raise TypeError( fn.__name__ + " does not support real types")
+def _nocomplex(func):
+    @wraps(func)
+    def nocomplex(self, *args, **kwargs):
+        if self.kind == 'real':
+            return func(self, *args, **kwargs)
+        else:
+            raise TypeError( func.__name__ + " does not support complex types")
+    return nocomplex
+
+def _noreal(func):
+    @wraps(func)
+    def noreal(self, *args, **kwargs):
+        if self.kind == 'complex':
+            return func(self, *args, **kwargs)
+        else:
+            raise TypeError( func.__name__ + " does not support real types")
+    return noreal
 
 def force_precision_to_match(scalar, precision):
     if _numpy.iscomplexobj(scalar):
-        if precision is 'single':
+        if precision == 'single':
             return _numpy.complex64(scalar)
         else:
             return _numpy.complex128(scalar)
     else:
-        if precision is 'single':
+        if precision == 'single':
             return _numpy.float32(scalar)
         else:
             return _numpy.float64(scalar)
 
 def common_kind(*dtypes):
     for dtype in dtypes:
-        if dtype.kind is 'c':
+        if dtype.kind == 'c':
             return dtype
     return dtypes[0]
    
@@ -118,6 +121,19 @@ def _scheme_matches_base_array(array):
     err_msg = "This function is a stub that should be overridden using the "
     err_msg += "scheme. You shouldn't be seeing this error!"
     raise ValueError(err_msg)
+
+def check_same_len_precision(a, b):
+    """Check that the two arguments have the same length and precision.
+    Raises ValueError if they do not.
+    """
+    if len(a) != len(b):
+        msg = 'lengths do not match ({} vs {})'.format(
+                len(a), len(b))
+        raise ValueError(msg)
+    if a.precision != b.precision:
+        msg = 'precisions do not match ({} vs {})'.format(
+                a.precision, b.precision)
+        raise TypeError(msg)
 
 class Array(object):
     """Array used to do numeric calculations on a various compute
@@ -149,11 +165,6 @@ class Array(object):
         if not copy:
             if not _scheme_matches_base_array(initial_array):
                 raise TypeError("Cannot avoid a copy of this array")
-            elif issubclass(type(self._scheme), _scheme.CPUScheme):
-                # ArrayWithAligned does not copy its memory; all 
-                # the following does is add the 'isaligned' flag
-                # in case initial_array was a true numpy array
-                self._data = ArrayWithAligned(initial_array)
             else:
                 self._data = initial_array
 
@@ -192,10 +203,9 @@ class Array(object):
             #Create new instance with initial_array as initialization.
             if issubclass(type(self._scheme), _scheme.CPUScheme):
                 if hasattr(initial_array, 'get'):
-                    self._data = ArrayWithAligned(_numpy.array(initial_array.get()))
+                    self._data = _numpy.array(initial_array.get())
                 else:
-                    self._data = ArrayWithAligned(_numpy.array(initial_array, 
-                                                               dtype=dtype, ndmin=1))
+                    self._data = _numpy.array(initial_array, dtype=dtype, ndmin=1)
             elif _scheme_matches_base_array(initial_array):
                 self._data = _copy_base_array(initial_array) # pylint:disable=assignment-from-no-return
             else:
@@ -209,31 +219,43 @@ class Array(object):
             ret = self._return(ret)
         return ret
 
+    def __array__(self, dtype=None):
+        arr = self.numpy()
+        if dtype is not None:
+            arr = arr.astype(dtype)
+        return arr
+
     @property
     def shape(self):
         return self._data.shape
      
-    @decorator
-    def _memoize_single(fn, self, arg):
-        badh = str(arg)
-        
-        if badh in self._saved:
-            return self._saved[badh]
+    def _memoize_single(func):
+        @wraps(func)
+        def memoize_single(self, arg):
+            badh = str(arg)
 
-        res = fn(self, arg) # pylint:disable=not-callable
-        self._saved[badh] = res      
-        return res
-                   
-    @decorator
-    def _returnarray(fn, self, *args):
-        return Array(fn(self, *args), copy=False) # pylint:disable=not-callable
+            if badh in self._saved:
+                return self._saved[badh]
 
-    @decorator
-    def _returntype(fn, self, *args):
-        ary = fn(self,*args) # pylint:disable=not-callable
-        if ary is NotImplemented:
-            return NotImplemented
-        return self._return(ary)
+            res = func(self, arg) # pylint:disable=not-callable
+            self._saved[badh] = res
+            return res
+        return memoize_single
+
+    def _returnarray(func):
+        @wraps(func)
+        def returnarray(self, *args, **kwargs):
+            return Array(func(self, *args, **kwargs), copy=False) # pylint:disable=not-callable
+        return returnarray
+
+    def _returntype(func):
+        @wraps(func)
+        def returntype(self, *args, **kwargs):
+            ary = func(self, *args, **kwargs) # pylint:disable=not-callable
+            if ary is NotImplemented:
+                return NotImplemented
+            return self._return(ary)
+        return returntype
         
     def _return(self, ary):
         """Wrap the ary to return an Array type """
@@ -241,84 +263,76 @@ class Array(object):
             return ary
         return Array(ary, copy=False)
 
-    @decorator
-    def _checkother(fn, self, *args):
-        nargs = ()
-        for other in args:
-            self._typecheck(other)  
-            if type(other) in _ALLOWED_SCALARS:
-                other = force_precision_to_match(other, self.precision)
-                nargs +=(other,)
-            elif isinstance(other, type(self)) or type(other) is Array:
-                if len(other) != len(self):
-                    raise ValueError('lengths do not match')
-                if other.precision == self.precision:
+    def _checkother(func):
+        @wraps(func)
+        def checkother(self, *args):
+            nargs = ()
+            for other in args:
+                self._typecheck(other)
+                if type(other) in _ALLOWED_SCALARS:
+                    other = force_precision_to_match(other, self.precision)
+                    nargs +=(other,)
+                elif isinstance(other, type(self)) or type(other) is Array:
+                    check_same_len_precision(self, other)
                     _convert_to_scheme(other)
                     nargs += (other._data,)
                 else:
-                    raise TypeError('precisions do not match')
-            else:
-                return NotImplemented
+                    return NotImplemented
 
-        return fn(self, *nargs) # pylint:disable=not-callable
-    
-    @decorator  
-    def _vcheckother(fn, self, *args):
-        nargs = ()
-        for other in args:
-            self._typecheck(other)  
-            if isinstance(other, type(self)) or type(other) is Array:
-                if len(other) != len(self):
-                    raise ValueError('lengths do not match')
-                if other.precision == self.precision:
+            return func(self, *nargs) # pylint:disable=not-callable
+        return checkother
+
+    def _vcheckother(func):
+        @wraps(func)
+        def vcheckother(self, *args):
+            nargs = ()
+            for other in args:
+                self._typecheck(other)
+                if isinstance(other, type(self)) or type(other) is Array:
+                    check_same_len_precision(self, other)
                     _convert_to_scheme(other)
                     nargs += (other._data,)
                 else:
-                    raise TypeError('precisions do not match')
-            else:
-                raise TypeError('array argument required')                    
+                    raise TypeError('array argument required')
 
-        return fn(self,*nargs) # pylint:disable=not-callable
+            return func(self, *nargs) # pylint:disable=not-callable
+        return vcheckother
         
-    @decorator  
-    def _vrcheckother(fn, self,*args):
-        nargs = ()
-        for other in args:
-            if isinstance(other, type(self)) or type(other) is Array:
-                if len(other) != len(self):
-                    raise ValueError('lengths do not match')
-                if other.precision == self.precision:
+    def _vrcheckother(func):
+        @wraps(func)
+        def vrcheckother(self, *args):
+            nargs = ()
+            for other in args:
+                if isinstance(other, type(self)) or type(other) is Array:
+                    check_same_len_precision(self, other)
                     _convert_to_scheme(other)
                     nargs += (other._data,)
                 else:
-                    raise TypeError('precisions do not match')
-            else:
-                raise TypeError('array argument required')                    
+                    raise TypeError('array argument required')
 
-        return fn(self, *nargs) # pylint:disable=not-callable
+            return func(self, *nargs) # pylint:disable=not-callable
+        return vrcheckother
 
-    @decorator
-    def _icheckother(fn, self, other):
-        """ Checks the input to in-place operations """
-        self._typecheck(other) 
-        if type(other) in _ALLOWED_SCALARS:
-            if self.kind == 'real' and type(other) == complex:
-                raise TypeError('dtypes are incompatible')
-            other = force_precision_to_match(other, self.precision)
-        elif isinstance(other, type(self)) or type(other) is Array:
-            if len(other) != len(self):
-                raise ValueError('lengths do not match')
-            if self.kind == 'real' and other.kind == 'complex':
-                raise TypeError('dtypes are incompatible')
-            if other.precision == self.precision:
+    def _icheckother(func):
+        @wraps(func)
+        def icheckother(self, other):
+            """ Checks the input to in-place operations """
+            self._typecheck(other)
+            if type(other) in _ALLOWED_SCALARS:
+                if self.kind == 'real' and type(other) == complex:
+                    raise TypeError('dtypes are incompatible')
+                other = force_precision_to_match(other, self.precision)
+            elif isinstance(other, type(self)) or type(other) is Array:
+                check_same_len_precision(self, other)
+                if self.kind == 'real' and other.kind == 'complex':
+                    raise TypeError('dtypes are incompatible')
                 _convert_to_scheme(other)
                 other = other._data
             else:
-                raise TypeError('precisions do not match')
-        else:
-            return NotImplemented
+                return NotImplemented
 
-        return fn(self, other) # pylint:disable=not-callable
+            return func(self, other) # pylint:disable=not-callable
+        return icheckother
 
     def _typecheck(self, other):
         """ Additional typechecking for other. Placeholder for use by derived
@@ -385,6 +399,12 @@ class Array(object):
     __div__ = __truediv__
     __idiv__ = __itruediv__
     __rdiv__ = __rtruediv__
+
+    @_returntype
+    @_convert
+    def __neg__(self):
+        """ Return negation of self """
+        return - self._data
 
     @_returntype
     @_convert
@@ -820,7 +840,6 @@ class Array(object):
     def roll(self, shift):
         """shift vector
         """
-        self._saved = LimitedSizeDict(size_limit=2**5)
         new_arr = zeros(len(self), dtype=self.dtype)
 
         if shift < 0:
@@ -831,7 +850,9 @@ class Array(object):
         
         new_arr[0:shift] = self[len(self)-shift: len(self)]
         new_arr[shift:len(self)] = self[0:len(self)-shift]
-            
+        
+        self._saved = LimitedSizeDict(size_limit=2**5)
+        
         self._data = new_arr._data
 
     @_returntype
@@ -856,7 +877,7 @@ class Array(object):
         if isinstance(other,Array):
             _convert_to_scheme(other)
 
-            if self.kind is 'real' and other.kind is 'complex':
+            if self.kind == 'real' and other.kind == 'complex':
                 raise ValueError('Cannot set real value with complex')
 
             if isinstance(index,slice):          
@@ -996,9 +1017,9 @@ class Array(object):
                 _numpy.savetxt(path, output)
         elif ext == '.hdf':
             key = 'data' if group is None else group
-            f = h5py.File(path)
-            f.create_dataset(key, data=self.numpy(), compression='gzip',
-                             compression_opts=9, shuffle=True)
+            with h5py.File(path, 'a') as f:
+                f.create_dataset(key, data=self.numpy(), compression='gzip',
+                                 compression_opts=9, shuffle=True)
         else:
             raise ValueError('Path must end with .npy, .txt, or .hdf')
            
@@ -1047,20 +1068,22 @@ class Array(object):
             
 # Convenience functions for determining dtypes
 def real_same_precision_as(data):
-    if data.precision is 'single':
+    if data.precision == 'single':
         return float32
-    elif data.precision is 'double':
+    elif data.precision == 'double':
         return float64
 
 def complex_same_precision_as(data):
-    if data.precision is 'single':
+    if data.precision == 'single':
         return complex64
-    elif data.precision is 'double':
+    elif data.precision == 'double':
         return complex128
 
-@decorator
-def _return_array(fn, *args, **kwds):
-    return Array(fn(*args, **kwds), copy=False)
+def _return_array(func):
+    @wraps(func)
+    def return_array(*args, **kwds):
+        return Array(func(*args, **kwds), copy=False)
+    return return_array
 
 @_return_array
 @schemed(BACKEND_PREFIX)
@@ -1071,42 +1094,58 @@ def zeros(length, dtype=float64):
     err_msg += "the scheme. You shouldn't be seeing this error!"
     raise ValueError(err_msg)
 
-def load_array(path, group=None):
+@_return_array
+@schemed(BACKEND_PREFIX)
+def empty(length, dtype=float64):
+    """ Return an empty Array (no initialization)
     """
-    Load an Array from a .hdf, .txt or .npy file. The
-    default data types will be double precision floating point.
+    err_msg = "This function is a stub that should be overridden using "
+    err_msg += "the scheme. You shouldn't be seeing this error!"
+    raise ValueError(err_msg)
+
+def load_array(path, group=None):
+    """Load an Array from an HDF5, ASCII or Numpy file. The file type is
+    inferred from the file extension, which must be `.hdf`, `.txt` or `.npy`.
+
+    For ASCII and Numpy files with a single column, a real array is returned.
+    For files with two columns, the columns are assumed to contain the real
+    and imaginary parts of a complex array respectively.
+
+    The default data types will be double precision floating point.
 
     Parameters
     ----------
     path : string
-        source file path. Must end with either .npy or .txt.
+        Input file path. Must end with either `.npy`, `.txt` or `.hdf`.
 
-    group: string 
-        Additional name for internal storage use. Ex. hdf storage uses
-        this as the key value.
+    group: string
+        Additional name for internal storage use. When reading HDF files, this
+        is the path to the HDF dataset to read.
 
     Raises
     ------
     ValueError
-        If path does not end in .npy or .txt.
+        If path does not end with a supported extension. For Numpy and ASCII
+        input files, this is also raised if the array does not have 1 or 2
+        dimensions.
     """
     ext = _os.path.splitext(path)[1]
     if ext == '.npy':
-        data = _numpy.load(path)    
+        data = _numpy.load(path)
     elif ext == '.txt':
         data = _numpy.loadtxt(path)
     elif ext == '.hdf':
         key = 'data' if group is None else group
-        return Array(h5py.File(path)[key]) 
+        with h5py.File(path, 'r') as f:
+            array = Array(f[key])
+        return array
     else:
         raise ValueError('Path must end with .npy, .hdf, or .txt')
-        
+
     if data.ndim == 1:
         return Array(data)
     elif data.ndim == 2:
         return Array(data[:,0] + 1j*data[:,1])
-    else:
-        raise ValueError('File has %s dimensions, cannot convert to Array, \
-                          must be 1 (real) or 2 (complex)' % data.ndim)
-    
 
+    raise ValueError('File has %s dimensions, cannot convert to Array, \
+                      must be 1 (real) or 2 (complex)' % data.ndim)

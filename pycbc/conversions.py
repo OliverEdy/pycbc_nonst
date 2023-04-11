@@ -23,19 +23,23 @@
 # =============================================================================
 #
 """
-This modules provides a library of functions that calculate waveform parameters
+This module provides a library of functions that calculate waveform parameters
 from other parameters. All exposed functions in this module's namespace return
 one parameter given a set of inputs.
 """
-from __future__ import division
 
 import copy
 import numpy
 import lal
-import lalsimulation as lalsim
 from pycbc.detector import Detector
+import pycbc.cosmology
+from .coordinates import (
+    spherical_to_cartesian as _spherical_to_cartesian,
+    cartesian_to_spherical as _cartesian_to_spherical)
+from pycbc import neutron_stars as ns
 
-from .coordinates import spherical_to_cartesian as _spherical_to_cartesian
+pykerr = pycbc.libutils.import_optional('pykerr')
+lalsim = pycbc.libutils.import_optional('lalsimulation')
 
 #
 # =============================================================================
@@ -403,6 +407,105 @@ def lambda_tilde(mass1, mass2, lambda1, lambda2):
     p2 = (1 - 4 * eta)**0.5 * (1 + 9 * eta - 11 * eta ** 2.0) * (ldiff)
     return formatreturn(8.0 / 13.0 * (p1 + p2), input_is_array)
 
+
+def lambda_from_mass_tov_file(mass, tov_file, distance=0.):
+    """Return the lambda parameter(s) corresponding to the input mass(es)
+    interpolating from the mass-Lambda data for a particular EOS read in from
+    an ASCII file.
+    """
+    data = numpy.loadtxt(tov_file)
+    mass_from_file = data[:, 0]
+    lambda_from_file = data[:, 1]
+    mass_src = mass/(1.0 + pycbc.cosmology.redshift(distance))
+    lambdav = numpy.interp(mass_src, mass_from_file, lambda_from_file)
+    return lambdav
+
+
+def remnant_mass_from_mass1_mass2_spherical_spin_eos(
+        mass1, mass2, spin1a=0.0, spin1pol=0.0, eos='2H'):
+    """
+    Function that determines the remnant disk mass of an NS-BH system
+    using the fit to numerical-relativity results discussed in
+    Foucart, Hinderer & Nissanke, PRD 98, 081501(R) (2018).
+    The BH spin may be misaligned with the orbital angular momentum.
+    In such cases the ISSO is approximated following the approach of
+    Stone, Loeb & Berger, PRD 87, 084053 (2013), which was originally
+    devised for a previous NS-BH remnant mass fit of
+    Foucart, PRD 86, 124007 (2012).
+    Note: NS spin is assumed to be 0!
+
+    Parameters
+    -----------
+    mass1 : float
+        The mass of the black hole, in solar masses.
+    mass2 : float
+        The mass of the neutron star, in solar masses.
+    spin1a : float, optional
+        The dimensionless magnitude of the spin of mass1. Default = 0.
+    spin1pol : float, optional
+        The tilt angle of the spin of mass1. Default = 0 (aligned w L).
+    eos : str, optional
+        Name of the equation of state being adopted. Default is '2H'.
+
+    Returns
+    ----------
+    remnant_mass: float
+        The remnant mass in solar masses
+    """
+    mass1, mass2, spin1a, spin1pol, input_is_array = ensurearray(
+        mass1, mass2, spin1a, spin1pol)
+    # mass1 must be greater than mass2
+    try:
+        if any(mass2 > mass1) and input_is_array:
+            raise ValueError(f'Require mass1 >= mass2')
+    except TypeError:
+        if mass2 > mass1 and not input_is_array:
+            raise ValueError(f'Require mass1 >= mass2. {mass1} < {mass2}')
+    ns_compactness, ns_b_mass = ns.initialize_eos(mass2, eos)
+    eta = eta_from_mass1_mass2(mass1, mass2)
+    remnant_mass = ns.foucart18(
+        eta, ns_compactness, ns_b_mass, spin1a, spin1pol)
+    return formatreturn(remnant_mass, input_is_array)
+
+
+def remnant_mass_from_mass1_mass2_cartesian_spin_eos(
+        mass1, mass2, spin1x=0.0, spin1y=0.0, spin1z=0.0, eos='2H'):
+    """
+    Function that determines the remnant disk mass of an NS-BH system
+    using the fit to numerical-relativity results discussed in
+    Foucart, Hinderer & Nissanke, PRD 98, 081501(R) (2018).
+    The BH spin may be misaligned with the orbital angular momentum.
+    In such cases the ISSO is approximated following the approach of
+    Stone, Loeb & Berger, PRD 87, 084053 (2013), which was originally
+    devised for a previous NS-BH remnant mass fit of
+    Foucart, PRD 86, 124007 (2012).
+    Note: NS spin is assumed to be 0!
+
+    Parameters
+    -----------
+    mass1 : float
+        The mass of the black hole, in solar masses.
+    mass2 : float
+        The mass of the neutron star, in solar masses.
+    spin1x : float, optional
+        The dimensionless x-component of the spin of mass1. Default = 0.
+    spin1y : float, optional
+        The dimensionless y-component of the spin of mass1. Default = 0.
+    spin1z : float, optional
+        The dimensionless z-component of the spin of mass1. Default = 0.
+    eos: str, optional
+        Name of the equation of state being adopted. Default is '2H'.
+
+    Returns
+    ----------
+    remnant_mass: float
+        The remnant mass in solar masses
+    """
+    spin1a, _, spin1pol = _cartesian_to_spherical(spin1x, spin1y, spin1z)
+    return remnant_mass_from_mass1_mass2_spherical_spin_eos(
+        mass1, mass2, spin1a, spin1pol, eos=eos)
+
+
 #
 # =============================================================================
 #
@@ -630,6 +733,27 @@ def dquadmon_from_lambda(lambdav):
     ln_quad_moment = ai + bi*ll + ci*ll**2.0 + di*ll**3.0 + ei*ll**4.0
     return numpy.exp(ln_quad_moment) - 1
 
+
+def spin_from_pulsar_freq(mass, radius, freq):
+    """Returns the dimensionless spin of a pulsar.
+
+    Assumes the pulsar is a solid sphere when computing the moment of inertia.
+
+    Parameters
+    ----------
+    mass : float
+        The mass of the pulsar, in solar masses.
+    radius : float
+        The assumed radius of the pulsar, in kilometers.
+    freq : float
+        The spin frequency of the pulsar, in Hz.
+    """
+    omega = 2 * numpy.pi * freq
+    mt = mass * lal.MTSUN_SI
+    mominert = (2/5.) * mt * (radius * 1000 / lal.C_SI)**2
+    return mominert * omega / mt**2
+
+
 #
 # =============================================================================
 #
@@ -649,7 +773,8 @@ def distance_from_chirp_distance_mchirp(chirp_distance, mchirp, ref_mass=1.4):
     return chirp_distance * (2.**(-1./5) * ref_mass / mchirp)**(-5./6)
 
 
-def _det_tc(detector_name, ra, dec, tc, ref_frame='geocentric'):
+_detector_cache = {}
+def det_tc(detector_name, ra, dec, tc, ref_frame='geocentric', relative=False):
     """Returns the coalescence time of a signal in the given detector.
 
     Parameters
@@ -671,28 +796,30 @@ def _det_tc(detector_name, ra, dec, tc, ref_frame='geocentric'):
     float :
         The GPS time of the coalescence in detector `detector_name`.
     """
+    ref_time = tc
+    if relative:
+        tc = 0
+
     if ref_frame == detector_name:
         return tc
-    detector = Detector(detector_name)
+    if detector_name not in _detector_cache:
+        _detector_cache[detector_name] = Detector(detector_name)
+    detector = _detector_cache[detector_name]
     if ref_frame == 'geocentric':
-        return tc + detector.time_delay_from_earth_center(ra, dec, tc)
+        return tc + detector.time_delay_from_earth_center(ra, dec, ref_time)
     else:
         other = Detector(ref_frame)
-        return tc + detector.time_delay_from_detector(other, ra, dec, tc)
+        return tc + detector.time_delay_from_detector(other, ra, dec, ref_time)
 
-det_tc = numpy.vectorize(_det_tc)
-
-def _optimal_orientation_from_detector(detector_name, tc):
+def optimal_orientation_from_detector(detector_name, tc):
     """ Low-level function to be called from _optimal_dec_from_detector
     and _optimal_ra_from_detector"""
 
     d = Detector(detector_name)
     ra, dec = d.optimal_orientation(tc)
-
     return ra, dec
 
-
-def _optimal_dec_from_detector(detector_name, tc):
+def optimal_dec_from_detector(detector_name, tc):
     """For a given detector and GPS time, return the optimal orientation
     (directly overhead of the detector) in declination.
 
@@ -709,13 +836,9 @@ def _optimal_dec_from_detector(detector_name, tc):
     float :
         The declination of the signal, in radians.
     """
-    return _optimal_orientation_from_detector(detector_name, tc)[1]
+    return optimal_orientation_from_detector(detector_name, tc)[1]
 
-
-optimal_dec_from_detector = numpy.vectorize(_optimal_dec_from_detector)
-
-
-def _optimal_ra_from_detector(detector_name, tc):
+def optimal_ra_from_detector(detector_name, tc):
     """For a given detector and GPS time, return the optimal orientation
     (directly overhead of the detector) in right ascension.
 
@@ -732,11 +855,7 @@ def _optimal_ra_from_detector(detector_name, tc):
     float :
         The declination of the signal, in radians.
     """
-    return _optimal_orientation_from_detector(detector_name, tc)[0]
-
-
-optimal_ra_from_detector = numpy.vectorize(_optimal_ra_from_detector)
-
+    return optimal_orientation_from_detector(detector_name, tc)[0]
 
 #
 # =============================================================================
@@ -763,9 +882,8 @@ def snr_from_loglr(loglr):
     if singleval:
         loglr = numpy.array([loglr])
     # temporarily quiet sqrt(-1) warnings
-    numpysettings = numpy.seterr(invalid='ignore')
-    snrs = numpy.sqrt(2*loglr)
-    numpy.seterr(**numpysettings)
+    with numpy.errstate(invalid="ignore"):
+        snrs = numpy.sqrt(2*loglr)
     snrs[numpy.isnan(snrs)] = 0.
     if singleval:
         snrs = snrs[0]
@@ -778,39 +896,10 @@ def snr_from_loglr(loglr):
 #
 # =============================================================================
 #
-def _genqnmfreq(mass, spin, l, m, nmodes, qnmfreq=None):
-    """Convenience function to generate QNM frequencies from lalsimulation.
-
-    Parameters
-    ----------
-    mass : float
-        The mass of the black hole (in solar masses).
-    spin : float
-        The dimensionless spin of the black hole.
-    l : int
-        l-index of the harmonic.
-    m : int
-        m-index of the harmonic.
-    nmodes : int
-        The number of overtones to generate.
-    qnmfreq : lal.COMPLEX16Vector, optional
-        LAL vector to write the results into. Must be the same length as
-        ``nmodes``. If None, will create one.
-
-    Returns
-    -------
-    lal.COMPLEX16Vector
-        LAL vector containing the complex QNM frequencies.
-    """
-    if qnmfreq is None:
-        qnmfreq = lal.CreateCOMPLEX16Vector(int(nmodes))
-    lalsim.SimIMREOBGenerateQNMFreqV2fromFinal(
-        qnmfreq, float(mass), float(spin), int(l), int(m), int(nmodes))
-    return qnmfreq
 
 
-def get_lm_f0tau(mass, spin, l, m, nmodes):
-    """Return the f0 and the tau of each overtone for a given l, m mode.
+def get_lm_f0tau(mass, spin, l, m, n=0, which='both'):
+    """Return the f0 and the tau for one or more overtones of an l, m mode.
 
     Parameters
     ----------
@@ -822,49 +911,39 @@ def get_lm_f0tau(mass, spin, l, m, nmodes):
         l-index of the harmonic.
     m : int or array
         m-index of the harmonic.
-    nmodes : int
-        The number of overtones to generate.
+    n : int or array
+        Overtone(s) to generate, where n=0 is the fundamental mode.
+        Default is 0.
+    which : {'both', 'f0', 'tau'}, optional
+        What to return; 'both' returns both frequency and tau, 'f0' just
+        frequency, 'tau' just tau. Default is 'both'.
 
     Returns
     -------
     f0 : float or array
-        The frequency of the QNM(s), in Hz. If only a single mode is requested
-        (and mass, spin, l, and m are not arrays), this will be a float. If
-        multiple modes requested, will be an array with shape
-        ``[input shape x] nmodes``, where ``input shape`` is the broadcasted
-        shape of the inputs.
+        Returned if ``which`` is 'both' or 'f0'.
+        The frequency of the QNM(s), in Hz.
     tau : float or array
-        The damping time of the QNM(s), in seconds. Return type is same as f0.
+        Returned if ``which`` is 'both' or 'tau'.
+        The damping time of the QNM(s), in seconds.
     """
     # convert to arrays
-    mass, spin, l, m, input_is_array = ensurearray(
-        mass, spin, l, m)
+    mass, spin, l, m, n, input_is_array = ensurearray(
+        mass, spin, l, m, n)
     # we'll ravel the arrays so we can evaluate each parameter combination
     # one at a a time
-    origshape = mass.shape
-    if nmodes < 1:
-        raise ValueError("nmodes must be >= 1")
-    if nmodes > 1:
-        newshape = tuple(list(origshape)+[nmodes])
-    else:
-        newshape = origshape
-    f0s = numpy.zeros((mass.size, nmodes))
-    taus = numpy.zeros((mass.size, nmodes))
-    mass = mass.ravel()
-    spin = spin.ravel()
-    l = l.ravel()
-    m = m.ravel()
-    qnmfreq = None
-    modes = range(nmodes)
-    for ii in range(mass.size):
-        qnmfreq = _genqnmfreq(mass[ii], spin[ii], l[ii], m[ii], nmodes,
-                              qnmfreq=qnmfreq)
-        f0s[ii, :] = [qnmfreq.data[n].real/(2 * numpy.pi) for n in modes]
-        taus[ii, :] = [1./qnmfreq.data[n].imag for n in modes]
-    f0s = f0s.reshape(newshape)
-    taus = taus.reshape(newshape)
-    return (formatreturn(f0s, input_is_array),
-            formatreturn(taus, input_is_array))
+    getf0 = which == 'both' or which == 'f0'
+    gettau = which == 'both' or which == 'tau'
+    out = []
+    if getf0:
+        f0s = pykerr.qnmfreq(mass, spin, l, m, n)
+        out.append(formatreturn(f0s, input_is_array))
+    if gettau:
+        taus = pykerr.qnmtau(mass, spin, l, m, n)
+        out.append(formatreturn(taus, input_is_array))
+    if not (getf0 and gettau):
+        out = out[0]
+    return out
 
 
 def get_lm_f0tau_allmodes(mass, spin, modes):
@@ -878,10 +957,10 @@ def get_lm_f0tau_allmodes(mass, spin, modes):
     spin : float or array
         Dimensionless spin of the final black hole.
     modes : list of str
-        The modes to get. Each string in the list should be formatted 'lmN',
-        where l (m) is the l (m) index of the harmonic and N is the number of
-        overtones to generate (note, N is not the index of the overtone). For
-        example, '221' will generate the 0th overtone of the l = m = 2 mode.
+        The modes to get. Each string in the list should be formatted
+        'lmN', where l (m) is the l (m) index of the harmonic and N is the
+        number of overtones to generate (note, N is not the index of the
+        overtone).
 
     Returns
     -------
@@ -895,25 +974,17 @@ def get_lm_f0tau_allmodes(mass, spin, modes):
         same as ``f0``.
     """
     f0, tau = {}, {}
-    key = '{}{}{}'
     for lmn in modes:
+        key = '{}{}{}'
         l, m, nmodes = int(lmn[0]), int(lmn[1]), int(lmn[2])
-        tmp_f0, tmp_tau = get_lm_f0tau(mass, spin, l, m, nmodes)
-        if nmodes == 1:
-            # in this case, tmp_f0 and tmp_tau will just be floats
-            f0[key.format(l, m, '0')] = tmp_f0
-            tau[key.format(l, m, '0')] = tmp_tau
-        else:
-            for n in range(nmodes):
-                # we need to wrap tmp_f0 with formatreturn to ensure that if
-                # only a mass, spin pair was requested, the value stored to
-                # the dict is a float
-                f0[key.format(l, m, n)] = formatreturn(tmp_f0[..., n])
-                tau[key.format(l, m, n)] = formatreturn(tmp_tau[..., n])
+        for n in range(nmodes):
+            tmp_f0, tmp_tau = get_lm_f0tau(mass, spin, l, m, n)
+            f0[key.format(l, abs(m), n)] = tmp_f0
+            tau[key.format(l, abs(m), n)] = tmp_tau
     return f0, tau
 
 
-def freq_from_final_mass_spin(final_mass, final_spin, l=2, m=2, nmodes=1):
+def freq_from_final_mass_spin(final_mass, final_spin, l=2, m=2, n=0):
     """Returns QNM frequency for the given mass and spin and mode.
 
     Parameters
@@ -926,22 +997,19 @@ def freq_from_final_mass_spin(final_mass, final_spin, l=2, m=2, nmodes=1):
         l-index of the harmonic. Default is 2.
     m : int or array, optional
         m-index of the harmonic. Default is 2.
-    nmodes : int, optional
-        The number of overtones to generate. Default is 1.
+    n : int or array
+        Overtone(s) to generate, where n=0 is the fundamental mode.
+        Default is 0.
 
     Returns
     -------
     float or array
-        The frequency of the QNM(s), in Hz. If only a single mode is requested
-        (and mass, spin, l, and m are not arrays), this will be a float. If
-        multiple modes requested, will be an array with shape
-        ``[input shape x] nmodes``, where ``input shape`` is the broadcasted
-        shape of the inputs.
+        The frequency of the QNM(s), in Hz.
     """
-    return get_lm_f0tau(final_mass, final_spin, l, m, nmodes)[0]
+    return get_lm_f0tau(final_mass, final_spin, l, m, n=n, which='f0')
 
 
-def tau_from_final_mass_spin(final_mass, final_spin, l=2, m=2, nmodes=1):
+def tau_from_final_mass_spin(final_mass, final_spin, l=2, m=2, n=0):
     """Returns QNM damping time for the given mass and spin and mode.
 
     Parameters
@@ -954,31 +1022,34 @@ def tau_from_final_mass_spin(final_mass, final_spin, l=2, m=2, nmodes=1):
         l-index of the harmonic. Default is 2.
     m : int or array, optional
         m-index of the harmonic. Default is 2.
-    nmodes : int, optional
-        The number of overtones to generate. Default is 1.
+    n : int or array
+        Overtone(s) to generate, where n=0 is the fundamental mode.
+        Default is 0.
 
     Returns
     -------
     float or array
-        The damping time of the QNM(s), in seconds. If only a single mode is
-        requested (and mass, spin, l, and m are not arrays), this will be a
-        float. If multiple modes requested, will be an array with shape
-        ``[input shape x] nmodes``, where ``input shape`` is the broadcasted
-        shape of the inputs.
+        The damping time of the QNM(s), in seconds.
     """
-    return get_lm_f0tau(final_mass, final_spin, l, m, nmodes)[1]
+    return get_lm_f0tau(final_mass, final_spin, l, m, n=n, which='tau')
 
 
-# The following are from Table VIII of Berti et al., PRD 73 064030,
-# arXiv:gr-qc/0512160 (2006).
-# Keys are l,m. Constants are for converting from
+# The following are from Table VIII, IX, X of Berti et al.,
+# PRD 73 064030, arXiv:gr-qc/0512160 (2006).
+# Keys are l,m (only n=0 supported). Constants are for converting from
 # frequency and damping time to mass and spin.
 _berti_spin_constants = {
-    (2,2): (0.7, 1.4187, -0.4990),
+    (2, 2): (0.7, 1.4187, -0.4990),
+    (2, 1): (-0.3, 2.3561, -0.2277),
+    (3, 3): (0.9, 2.343, -0.4810),
+    (4, 4): (1.1929, 3.1191, -0.4825),
     }
 
 _berti_mass_constants = {
-    (2,2): (1.5251, -1.1568, 0.1292),
+    (2, 2): (1.5251, -1.1568, 0.1292),
+    (2, 1): (0.6, -0.2339, 0.4175),
+    (3, 3): (1.8956, -1.3043, 0.1818),
+    (4, 4): (2.3, -1.5056, 0.2244),
     }
 
 
@@ -986,8 +1057,8 @@ def final_spin_from_f0_tau(f0, tau, l=2, m=2):
     """Returns the final spin based on the given frequency and damping time.
 
     .. note::
-        Currently, only l = m = 2 is supported. Any other indices will raise
-        a ``KeyError``.
+        Currently, only (l,m) = (2,2), (3,3), (4,4), (2,1) are supported.
+        Any other indices will raise a ``KeyError``.
 
     Parameters
     ----------
@@ -1031,8 +1102,8 @@ def final_mass_from_f0_tau(f0, tau, l=2, m=2):
     and damping time.
 
     .. note::
-        Currently, only l = m = 2 is supported. Any other indices will raise
-        a ``KeyError``.
+        Currently, only (l,m) = (2,2), (3,3), (4,4), (2,1) are supported.
+        Any other indices will raise a ``KeyError``.
 
     Parameters
     ----------
@@ -1056,6 +1127,272 @@ def final_mass_from_f0_tau(f0, tau, l=2, m=2):
     spin = final_spin_from_f0_tau(f0, tau, l=l, m=m)
     a, b, c = _berti_mass_constants[l,m]
     return (a + b*(1-spin)**c)/(2*numpy.pi*f0*lal.MTSUN_SI)
+
+def freqlmn_from_other_lmn(f0, tau, current_l, current_m, new_l, new_m):
+    """Returns the QNM frequency (in Hz) of a chosen new (l,m) mode from the
+    given current (l,m) mode.
+
+    Parameters
+    ----------
+    f0 : float or array
+        Frequency of the current QNM (in Hz).
+    tau : float or array
+        Damping time of the current QNM (in seconds).
+    current_l : int, optional
+        l-index of the current QNM.
+    current_m : int, optional
+        m-index of the current QNM.
+    new_l : int, optional
+        l-index of the new QNM to convert to.
+    new_m : int, optional
+        m-index of the new QNM to convert to.
+
+    Returns
+    -------
+    float or array
+        The frequency of the new (l, m) QNM mode. If the combination of
+        frequency and damping time provided for the current (l, m) QNM mode
+        correspond to an unphysical Kerr black hole mass and/or spin,
+        ``numpy.nan`` will be returned.
+    """
+    mass = final_mass_from_f0_tau(f0, tau, l=current_l, m=current_m)
+    spin = final_spin_from_f0_tau(f0, tau, l=current_l, m=current_m)
+    mass, spin, input_is_array = ensurearray(mass, spin)
+
+    mass[mass < 0] = numpy.nan
+    spin[numpy.abs(spin) > 0.9996] = numpy.nan
+
+    new_f0 = freq_from_final_mass_spin(mass, spin, l=new_l, m=new_m)
+    return formatreturn(new_f0, input_is_array)
+
+
+def taulmn_from_other_lmn(f0, tau, current_l, current_m, new_l, new_m):
+    """Returns the QNM damping time (in seconds) of a chosen new (l,m) mode
+    from the given current (l,m) mode.
+
+    Parameters
+    ----------
+    f0 : float or array
+        Frequency of the current QNM (in Hz).
+    tau : float or array
+        Damping time of the current QNM (in seconds).
+    current_l : int, optional
+        l-index of the current QNM.
+    current_m : int, optional
+        m-index of the current QNM.
+    new_l : int, optional
+        l-index of the new QNM to convert to.
+    new_m : int, optional
+        m-index of the new QNM to convert to.
+
+    Returns
+    -------
+    float or array
+        The daming time of the new (l, m) QNM mode. If the combination of
+        frequency and damping time provided for the current (l, m) QNM mode
+        correspond to an unphysical Kerr black hole mass and/or spin,
+        ``numpy.nan`` will be returned.
+    """
+    mass = final_mass_from_f0_tau(f0, tau, l=current_l, m=current_m)
+    spin = final_spin_from_f0_tau(f0, tau, l=current_l, m=current_m)
+    mass, spin, input_is_array = ensurearray(mass, spin)
+
+    mass[mass < 0] = numpy.nan
+    spin[numpy.abs(spin) > 0.9996] = numpy.nan
+
+    new_tau = tau_from_final_mass_spin(mass, spin, l=new_l, m=new_m)
+    return formatreturn(new_tau, input_is_array)
+
+def get_final_from_initial(mass1, mass2, spin1x=0., spin1y=0., spin1z=0.,
+                           spin2x=0., spin2y=0., spin2z=0.,
+                           approximant='SEOBNRv4PHM', f_ref=-1):
+    """Estimates the final mass and spin from the given initial parameters.
+
+    This uses the fits used by either the NRSur7dq4 or EOBNR models for
+    converting from initial parameters to final, depending on the
+    ``approximant`` argument.
+
+    Parameters
+    ----------
+    mass1 : float
+        The mass of one of the components, in solar masses.
+    mass2 : float
+        The mass of the other component, in solar masses.
+    spin1x : float, optional
+        The dimensionless x-component of the spin of mass1. Default is 0.
+    spin1y : float, optional
+        The dimensionless y-component of the spin of mass1. Default is 0.
+    spin1z : float, optional
+        The dimensionless z-component of the spin of mass1. Default is 0.
+    spin2x : float, optional
+        The dimensionless x-component of the spin of mass2. Default is 0.
+    spin2y : float, optional
+        The dimensionless y-component of the spin of mass2. Default is 0.
+    spin2z : float, optional
+        The dimensionless z-component of the spin of mass2. Default is 0.
+    approximant : str, optional
+        The waveform approximant to use for the fit function. If "NRSur7dq4",
+        the NRSur7dq4Remnant fit in lalsimulation will be used. If "SEOBNRv4",
+        the ``XLALSimIMREOBFinalMassSpin`` function in lalsimulation will be
+        used. Otherwise, ``XLALSimIMREOBFinalMassSpinPrec`` from lalsimulation
+        will be used, with the approximant name passed as the approximant
+        in that function ("SEOBNRv4PHM" will work with this function).
+        Default is "SEOBNRv4PHM".
+    f_ref : float, optional
+        The reference frequency for the spins. Only used by the NRSur7dq4
+        fit. Default (-1) will use the default reference frequency for the
+        approximant.
+
+    Returns
+    -------
+    final_mass : float
+        The final mass, in solar masses.
+    final_spin : float
+        The dimensionless final spin.
+    """
+    args = (mass1, mass2, spin1x, spin1y, spin1z, spin2x, spin2y, spin2z)
+    args = ensurearray(*args)
+    input_is_array = args[-1]
+    origshape = args[0].shape
+    # flatten inputs for storing results
+    args = [a.ravel() for a in args[:-1]]
+    mass1, mass2, spin1x, spin1y, spin1z, spin2x, spin2y, spin2z = args
+    final_mass = numpy.full(mass1.shape, numpy.nan)
+    final_spin = numpy.full(mass1.shape, numpy.nan)
+    for ii in range(final_mass.size):
+        m1 = float(mass1[ii])
+        m2 = float(mass2[ii])
+        spin1 = list(map(float, [spin1x[ii], spin1y[ii], spin1z[ii]]))
+        spin2 = list(map(float, [spin2x[ii], spin2y[ii], spin2z[ii]]))
+        if approximant == 'NRSur7dq4':
+            from lalsimulation import nrfits
+            try:
+                res = nrfits.eval_nrfit(m1*lal.MSUN_SI,
+                                        m2*lal.MSUN_SI,
+                                        spin1, spin2, 'NRSur7dq4Remnant',
+                                        ['FinalMass', 'FinalSpin'],
+                                        f_ref=f_ref)
+            except RuntimeError:
+                continue
+            final_mass[ii] = res['FinalMass'][0] / lal.MSUN_SI
+            sf = res['FinalSpin']
+            final_spin[ii] = (sf**2).sum()**0.5
+            if sf[-1] < 0:
+                final_spin[ii] *= -1
+        elif approximant == 'SEOBNRv4':
+            _, fm, fs = lalsim.SimIMREOBFinalMassSpin(
+                m1, m2, spin1, spin2, getattr(lalsim, approximant))
+            final_mass[ii] = fm * (m1 + m2)
+            final_spin[ii] = fs
+        else:
+            _, fm, fs = lalsim.SimIMREOBFinalMassSpinPrec(
+                m1, m2, spin1, spin2, getattr(lalsim, approximant))
+            final_mass[ii] = fm * (m1 + m2)
+            final_spin[ii] = fs
+    final_mass = final_mass.reshape(origshape)
+    final_spin = final_spin.reshape(origshape)
+    return (formatreturn(final_mass, input_is_array),
+            formatreturn(final_spin, input_is_array))
+
+
+def final_mass_from_initial(mass1, mass2, spin1x=0., spin1y=0., spin1z=0.,
+                            spin2x=0., spin2y=0., spin2z=0.,
+                            approximant='SEOBNRv4PHM', f_ref=-1):
+    """Estimates the final mass from the given initial parameters.
+
+    This uses the fits used by either the NRSur7dq4 or EOBNR models for
+    converting from initial parameters to final, depending on the
+    ``approximant`` argument.
+
+    Parameters
+    ----------
+    mass1 : float
+        The mass of one of the components, in solar masses.
+    mass2 : float
+        The mass of the other component, in solar masses.
+    spin1x : float, optional
+        The dimensionless x-component of the spin of mass1. Default is 0.
+    spin1y : float, optional
+        The dimensionless y-component of the spin of mass1. Default is 0.
+    spin1z : float, optional
+        The dimensionless z-component of the spin of mass1. Default is 0.
+    spin2x : float, optional
+        The dimensionless x-component of the spin of mass2. Default is 0.
+    spin2y : float, optional
+        The dimensionless y-component of the spin of mass2. Default is 0.
+    spin2z : float, optional
+        The dimensionless z-component of the spin of mass2. Default is 0.
+    approximant : str, optional
+        The waveform approximant to use for the fit function. If "NRSur7dq4",
+        the NRSur7dq4Remnant fit in lalsimulation will be used. If "SEOBNRv4",
+        the ``XLALSimIMREOBFinalMassSpin`` function in lalsimulation will be
+        used. Otherwise, ``XLALSimIMREOBFinalMassSpinPrec`` from lalsimulation
+        will be used, with the approximant name passed as the approximant
+        in that function ("SEOBNRv4PHM" will work with this function).
+        Default is "SEOBNRv4PHM".
+    f_ref : float, optional
+        The reference frequency for the spins. Only used by the NRSur7dq4
+        fit. Default (-1) will use the default reference frequency for the
+        approximant.
+
+    Returns
+    -------
+    float
+        The final mass, in solar masses.
+    """
+    return get_final_from_initial(mass1, mass2, spin1x, spin1y, spin1z,
+                                  spin2x, spin2y, spin2z, approximant,
+                                  f_ref=f_ref)[0]
+
+
+def final_spin_from_initial(mass1, mass2, spin1x=0., spin1y=0., spin1z=0.,
+                            spin2x=0., spin2y=0., spin2z=0.,
+                            approximant='SEOBNRv4PHM', f_ref=-1):
+    """Estimates the final spin from the given initial parameters.
+
+    This uses the fits used by either the NRSur7dq4 or EOBNR models for
+    converting from initial parameters to final, depending on the
+    ``approximant`` argument.
+
+    Parameters
+    ----------
+    mass1 : float
+        The mass of one of the components, in solar masses.
+    mass2 : float
+        The mass of the other component, in solar masses.
+    spin1x : float, optional
+        The dimensionless x-component of the spin of mass1. Default is 0.
+    spin1y : float, optional
+        The dimensionless y-component of the spin of mass1. Default is 0.
+    spin1z : float, optional
+        The dimensionless z-component of the spin of mass1. Default is 0.
+    spin2x : float, optional
+        The dimensionless x-component of the spin of mass2. Default is 0.
+    spin2y : float, optional
+        The dimensionless y-component of the spin of mass2. Default is 0.
+    spin2z : float, optional
+        The dimensionless z-component of the spin of mass2. Default is 0.
+    approximant : str, optional
+        The waveform approximant to use for the fit function. If "NRSur7dq4",
+        the NRSur7dq4Remnant fit in lalsimulation will be used. If "SEOBNRv4",
+        the ``XLALSimIMREOBFinalMassSpin`` function in lalsimulation will be
+        used. Otherwise, ``XLALSimIMREOBFinalMassSpinPrec`` from lalsimulation
+        will be used, with the approximant name passed as the approximant
+        in that function ("SEOBNRv4PHM" will work with this function).
+        Default is "SEOBNRv4PHM".
+    f_ref : float, optional
+        The reference frequency for the spins. Only used by the NRSur7dq4
+        fit. Default (-1) will use the default reference frequency for the
+        approximant.
+
+    Returns
+    -------
+    float
+        The dimensionless final spin.
+    """
+    return get_final_from_initial(mass1, mass2, spin1x, spin1y, spin1z,
+                                  spin2x, spin2y, spin2z, approximant,
+                                  f_ref=f_ref)[1]
 
 
 #
@@ -1255,7 +1592,8 @@ def nltides_gw_phase_diff_isco(f_low, f0, amplitude, n, m1, m2):
     return formatreturn(phi_i - phi_l, input_is_array)
 
 
-__all__ = ['dquadmon_from_lambda', 'lambda_tilde', 'primary_mass',
+__all__ = ['dquadmon_from_lambda', 'lambda_tilde',
+           'lambda_from_mass_tov_file', 'primary_mass',
            'secondary_mass', 'mtotal_from_mass1_mass2',
            'q_from_mass1_mass2', 'invq_from_mass1_mass2',
            'eta_from_mass1_mass2', 'mchirp_from_mass1_mass2',
@@ -1284,7 +1622,11 @@ __all__ = ['dquadmon_from_lambda', 'lambda_tilde', 'primary_mass',
            'chirp_distance', 'det_tc', 'snr_from_loglr',
            'freq_from_final_mass_spin', 'tau_from_final_mass_spin',
            'final_spin_from_f0_tau', 'final_mass_from_f0_tau',
+           'final_mass_from_initial', 'final_spin_from_initial',
            'optimal_dec_from_detector', 'optimal_ra_from_detector',
            'chi_eff_from_spherical', 'chi_p_from_spherical',
-           'nltides_gw_phase_diff_isco',
+           'nltides_gw_phase_diff_isco', 'spin_from_pulsar_freq',
+           'freqlmn_from_other_lmn', 'taulmn_from_other_lmn',
+           'remnant_mass_from_mass1_mass2_spherical_spin_eos',
+           'remnant_mass_from_mass1_mass2_cartesian_spin_eos'
           ]

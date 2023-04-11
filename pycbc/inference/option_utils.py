@@ -17,161 +17,8 @@
 """This module contains standard options used for inference-related programs.
 """
 
-import logging
 import argparse
-
-from pycbc.workflow import WorkflowConfigParser
-from pycbc.psd import from_cli_multi_ifos as psd_from_cli_multi_ifos
-from pycbc.strain import from_cli_multi_ifos as strain_from_cli_multi_ifos
-from pycbc.strain import (gates_from_cli, psd_gates_from_cli,
-                          apply_gates_to_td, apply_gates_to_fd)
 from pycbc import waveform
-from pycbc import distributions
-
-
-# -----------------------------------------------------------------------------
-#
-#                   Utilities for loading config files
-#
-# -----------------------------------------------------------------------------
-
-def add_config_opts_to_parser(parser):
-    """Adds options for the configuration files to the given parser.
-    """
-    parser.add_argument("--config-files", type=str, nargs="+", required=True,
-                        help="A file parsable by "
-                             "pycbc.workflow.WorkflowConfigParser.")
-    parser.add_argument("--config-overrides", type=str, nargs="+",
-                        default=None, metavar="SECTION:OPTION:VALUE",
-                        help="List of section:option:value combinations to "
-                             "add into the configuration file.")
-
-
-def config_parser_from_cli(opts):
-    """Loads a config file from the given options, applying any overrides
-    specified. Specifically, config files are loaded from the `--config-files`
-    options while overrides are loaded from `--config-overrides`.
-    """
-    # read configuration file
-    logging.info("Reading configuration file")
-    if opts.config_overrides is not None:
-        overrides = [override.split(":") for override in opts.config_overrides]
-    else:
-        overrides = None
-    return WorkflowConfigParser(opts.config_files, overrides)
-
-
-# -----------------------------------------------------------------------------
-#
-#                       Utilities for loading data
-#
-# -----------------------------------------------------------------------------
-
-
-def add_low_frequency_cutoff_opt(parser):
-    """Adds the low-frequency-cutoff option to the given parser."""
-    # FIXME: this just uses the same frequency cutoff for every instrument for
-    # now. We should allow for different frequency cutoffs to be used; that
-    # will require (minor) changes to the Likelihood class
-    parser.add_argument("--low-frequency-cutoff", type=float,
-                        help="Low frequency cutoff for each IFO.")
-
-
-def low_frequency_cutoff_from_cli(opts):
-    """Parses the low frequency cutoff from the given options.
-
-    Returns
-    -------
-    dict
-        Dictionary of instruments -> low frequency cutoff.
-    """
-    # FIXME: this just uses the same frequency cutoff for every instrument for
-    # now. We should allow for different frequency cutoffs to be used; that
-    # will require (minor) changes to the Likelihood class
-    instruments = opts.instruments if opts.instruments is not None else []
-    return {ifo: opts.low_frequency_cutoff for ifo in instruments}
-
-
-def data_from_cli(opts):
-    """Loads the data needed for a model from the given
-    command-line options. Gates specifed on the command line are also applied.
-
-    Parameters
-    ----------
-    opts : ArgumentParser parsed args
-        Argument options parsed from a command line string (the sort of thing
-        returned by `parser.parse_args`).
-
-    Returns
-    -------
-    strain_dict : dict
-        Dictionary of instruments -> `TimeSeries` strain.
-    stilde_dict : dict
-        Dictionary of instruments -> `FrequencySeries` strain.
-    psd_dict : dict
-        Dictionary of instruments -> `FrequencySeries` psds.
-    """
-    # get gates to apply
-    gates = gates_from_cli(opts)
-    psd_gates = psd_gates_from_cli(opts)
-
-    # get strain time series
-    instruments = opts.instruments if opts.instruments is not None else []
-    strain_dict = strain_from_cli_multi_ifos(opts, instruments,
-                                             precision="double")
-    # apply gates if not waiting to overwhiten
-    if not opts.gate_overwhitened:
-        strain_dict = apply_gates_to_td(strain_dict, gates)
-
-    # get strain time series to use for PSD estimation
-    # if user has not given the PSD time options then use same data as analysis
-    if opts.psd_start_time and opts.psd_end_time:
-        logging.info("Will generate a different time series for PSD "
-                     "estimation")
-        psd_opts = opts
-        psd_opts.gps_start_time = psd_opts.psd_start_time
-        psd_opts.gps_end_time = psd_opts.psd_end_time
-        psd_strain_dict = strain_from_cli_multi_ifos(psd_opts,
-                                                     instruments,
-                                                     precision="double")
-        # apply any gates
-        logging.info("Applying gates to PSD data")
-        psd_strain_dict = apply_gates_to_td(psd_strain_dict, psd_gates)
-
-    elif opts.psd_start_time or opts.psd_end_time:
-        raise ValueError("Must give --psd-start-time and --psd-end-time")
-    else:
-        psd_strain_dict = strain_dict
-
-    # FFT strain and save each of the length of the FFT, delta_f, and
-    # low frequency cutoff to a dict
-    stilde_dict = {}
-    length_dict = {}
-    delta_f_dict = {}
-    low_frequency_cutoff_dict = low_frequency_cutoff_from_cli(opts)
-    for ifo in instruments:
-        stilde_dict[ifo] = strain_dict[ifo].to_frequencyseries()
-        length_dict[ifo] = len(stilde_dict[ifo])
-        delta_f_dict[ifo] = stilde_dict[ifo].delta_f
-
-    # get PSD as frequency series
-    psd_dict = psd_from_cli_multi_ifos(
-        opts, length_dict, delta_f_dict, low_frequency_cutoff_dict,
-        instruments, strain_dict=psd_strain_dict, precision="double")
-
-    # apply any gates to overwhitened data, if desired
-    if opts.gate_overwhitened and opts.gate is not None:
-        logging.info("Applying gates to overwhitened data")
-        # overwhiten the data
-        for ifo in gates:
-            stilde_dict[ifo] /= psd_dict[ifo]
-        stilde_dict = apply_gates_to_fd(stilde_dict, gates)
-        # unwhiten the data for the model
-        for ifo in gates:
-            stilde_dict[ifo] *= psd_dict[ifo]
-
-    return strain_dict, stilde_dict, psd_dict
-
 
 # -----------------------------------------------------------------------------
 #
@@ -208,7 +55,7 @@ class ParseLabelArg(argparse.Action):
                                             **kwargs)
 
     def __call__(self, parser, namespace, values, option_string=None):
-        singlearg = isinstance(values, (str, unicode))
+        singlearg = isinstance(values, str)
         if singlearg:
             values = [values]
         params = []
@@ -284,6 +131,22 @@ class ParseParametersArg(ParseLabelArg):
                 pass
 
 
+def add_injsamples_map_opt(parser):
+    """Adds option to parser to specify a mapping between injection parameters
+    an sample parameters.
+    """
+    parser.add_argument('--injection-samples-map', nargs='+',
+                        metavar='INJECTION_PARAM:SAMPLES_PARAM',
+                        help='Rename/apply functions to the injection '
+                             'parameters and name them the same as one of the '
+                             'parameters in samples. This can be used if the '
+                             'injection parameters are not the same as the '
+                             'samples parameters. INJECTION_PARAM may be a '
+                             'function of the injection parameters; '
+                             'SAMPLES_PARAM must a name of one of the '
+                             'parameters in the samples group.')
+
+
 def add_plot_posterior_option_group(parser):
     """Adds the options needed to configure plots of posterior results.
 
@@ -301,6 +164,14 @@ def add_plot_posterior_option_group(parser):
                         type=float,
                         help="Percentiles to draw lines at on the 1D "
                              "histograms.")
+    pgroup.add_argument('--no-marginal-lines', action='store_true',
+                        default=False,
+                        help="Do not add vertical lines in the 1D marginal "
+                             "plots showing the marginal percentiles.")
+    pgroup.add_argument('--no-marginal-titles', action='store_true',
+                        default=False,
+                        help="Do not add titles giving the 1D credible range "
+                             "over the 1D marginal plots.")
     pgroup.add_argument("--plot-scatter", action='store_true', default=False,
                         help="Plot each sample point as a scatter plot.")
     pgroup.add_argument("--plot-density", action="store_true", default=False,
@@ -348,6 +219,11 @@ def add_plot_posterior_option_group(parser):
                              "injection in the file to work. Any values "
                              "specified by expected-parameters will override "
                              "the values obtained for the injection.")
+    pgroup.add_argument('--pick-injection-by-time', action='store_true',
+                        default=False,
+                        help="In the case of multiple injections, pick one"
+                             " for plotting based on its proximity in time.")
+    add_injsamples_map_opt(pgroup)
     return pgroup
 
 
@@ -458,38 +334,28 @@ def add_density_option_group(parser):
         help="Specify the color to use for the contour lines. Default is "
              "white for density plots and black for scatter plots.")
     density_group.add_argument(
+        "--contour-linestyles", type=str, default=None, nargs="+",
+        help="Specify the linestyles to use for the contour lines. Defaut "
+             "is solid for all.")
+    density_group.add_argument(
+        "--no-contour-labels", action="store_true", default=False,
+        help="Don't put labels on the contours.")
+    density_group.add_argument(
         '--use-kombine-kde', default=False, action="store_true",
-        help="Use kombine's KDE for determining contours. "
-             "Default is to use scipy's gaussian_kde.")
-
+        help="Use kombine's clustered KDE for determining 2D marginal "
+             "contours and density instead of scipy's gaussian_kde (the "
+             "default). This is better at distinguishing bimodal "
+             "distributions, but is much slower than the default. For speed, "
+             "suggest setting --kde-args 'max_samples:20000' or smaller if "
+             "using this. Requires kombine to be installed.")
+    density_group.add_argument(
+        '--max-kde-samples', type=int, default=None,
+        help="Limit the number of samples used for KDE construction to the "
+             "given value. This can substantially speed up plot generation "
+             "(particularly when plotting multiple parameters). Suggested "
+             "values: 5000 to 10000.")
+    density_group.add_argument(
+        '--kde-args', metavar="ARG:VALUE", nargs='+', default=None,
+        help="Pass the given argrument, value pairs to the KDE function "
+             "(either scipy's or kombine's) when setting it up.")
     return density_group
-
-
-def prior_from_config(cp, sections='prior'):
-    """Loads a prior distribution from the given config file.
-
-    Parameters
-    ----------
-    cp : pycbc.workflow.WorkflowConfigParser
-        The config file to read.
-    sections : list of str, optional
-        The sections to retrieve the prior from. If ``None`` (the default),
-        will look in sections starting with 'prior'.
-
-    Returns
-    -------
-    distributions.JointDistribution
-        The prior distribution.
-    """
-    # Read variable and static parameters from the config file
-    variable_params, _ = distributions.read_params_from_config(
-        cp, prior_section=sections, vargs_section='variable_params',
-        sargs_section='static_params')
-    # Read constraints to apply to priors from the config file
-    constraints = distributions.read_constraints_from_config(cp)
-    # Get PyCBC distribution instances for each variable parameter in the
-    # config file
-    dists = distributions.read_distributions_from_config(cp, sections)
-    # construct class that will return draws from the prior
-    return distributions.JointDistribution(variable_params, *dists,
-                                           **{"constraints": constraints})

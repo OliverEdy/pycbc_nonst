@@ -2,7 +2,7 @@
 import os
 import logging
 import shutil
-import ConfigParser
+import configparser as ConfigParser
 import subprocess
 import glob
 import tempfile
@@ -28,6 +28,8 @@ class BaseJob(CondorDAGJob, CondorJob):
 
         if accounting_group:
             self.add_condor_cmd('accounting_group', accounting_group)
+
+        self.add_condor_cmd('request_disk', 1024)
 
 class FaithsimNode(CondorDAGNode):
     def __init__(self, job, tmplt_file, match_file, inj_per_job=None):
@@ -96,7 +98,7 @@ mkdir('plots')
 
 logging.info("Copying scripts")
 shutil.copy(banksim_prog, 'scripts/pycbc_faithsim')
-os.chmod('scripts/pycbc_faithsim', 0777)
+os.chmod('scripts/pycbc_faithsim', 0o0777)
 
 logging.info("Creating injection file")
 inj_str = "lalapps_inspinj " + get_ini_opts(confs, "inspinj") + "--output inj.xml"
@@ -114,7 +116,6 @@ logging.info("Creating DAG")
 
 dag = CondorDAG(logfile)
 dag.set_dag_file("faithsim")
-dag.set_dax_file("faithsim")
 
 fs_secs = matches_in_list(confs.sections(), 'faithsim')
 fsjobs = []
@@ -130,7 +131,7 @@ pjob = BaseJob("log", "scripts/pycbc_faithsim_plots", None, 'faithsim_plots',
 pnode = CondorDAGNode(pjob)
 
 for inj_num in range(num_banks):
-    bn = 'bank/bank' + str(inj_num) + '.xml'
+    bn = 'bank/bank' + str(inj_num) + '.xml.gz'
     
     for fsjob, sec in zip(fsjobs, fs_secs):
         sec_sub = str(sec[len('faithsim'):])
@@ -144,14 +145,11 @@ dag.add_node(pnode)
 
 f = open("scripts/pycbc_faithsim_collect_results", "w")
 f.write("""#!/usr/bin/env python
-from os.path import isfile
 from numpy import *
-from glue.ligolw import utils, table, lsctables, ligolw
+from ligo.lw import utils, table, lsctables
 import glob
+from pycbc.io.ligolw import LIGOLWContentHandler
 
-class ContentHandler(ligolw.LIGOLWContentHandler):
-    pass
-lsctables.use_in(ContentHandler)
 
 fils = glob.glob("match/match*.dat")
 mfields = ('match', 'overlap', 'time_offset', 'sigma1', 'sigma2')
@@ -176,10 +174,10 @@ if __name__ == "__main__":
         data = zeros(0, dtype=dtypeo)   
         for part in parts:
             btag = part.split('-')[2].split('.')[0]
-            bname = "bank/bank" + btag + ".xml"
+            bname = "bank/bank" + btag + ".xml.gz"
             if bname not in btables:
-                indoc = utils.load_filename(bname, False, contenthandler=ContentHandler)
-                btables[bname] = table.get_table(indoc, lsctables.SimInspiralTable.tableName) 
+                indoc = utils.load_filename(bname, False, contenthandler=LIGOLWContentHandler)
+                btables[bname] = lsctables.SimInspiralTable.get_table(indoc)
             bt = btables[bname]
             try:      
                 md = loadtxt(part, dtype=dtypem)
@@ -199,14 +197,14 @@ if __name__ == "__main__":
             data = append(data, pdata)
         savetxt('result-' + tag + '.dat', data)
 """)
-os.chmod('scripts/pycbc_faithsim_collect_results', 0777)
+os.chmod('scripts/pycbc_faithsim_collect_results', 0o0777)
     
 logging.info("Creating submit script")
 f = open("submit.sh", 'w')
 f.write("""#!/bin/bash
 condor_submit_dag faithsim.dag
 """)
-os.chmod('submit.sh', 0777)
+os.chmod('submit.sh', 0o0777)
 
 dag.write_sub_files()
 dag.write_script()
@@ -218,9 +216,8 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.cm
 import pylab
-from os.path import isfile
 from numpy import *
-from glue.ligolw import utils, table, lsctables
+from ligo.lw import utils, table, lsctables
 from matplotlib.ticker import MultipleLocator, FormatStrFormatter
 import glob
 
@@ -400,6 +397,6 @@ for fil in fils:
     name = pname + 'scatter' + v1 + '-' + v2 + '-' + v3
     basic_scatter(name, v1, v2, tag, v1d, v2d, v3d, v3, vmin=None, vmax=None)     
  """)
-os.chmod('scripts/pycbc_faithsim_plots', 0777)
+os.chmod('scripts/pycbc_faithsim_plots', 0o0777)
 
 logging.info('Done')

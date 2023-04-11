@@ -17,6 +17,7 @@ This modules provides classes for evaluating Gaussian distributions.
 """
 
 import numpy
+from scipy.special import erf, erfinv
 import scipy.stats
 from pycbc.distributions import bounded
 
@@ -60,11 +61,6 @@ class Gaussian(bounded.BoundedDist):
         unit variance. If None is provided for the bounds, the distribution
         will be a normal, unbounded Gaussian (equivalent to setting the bounds
         to `[-inf, inf)`).
-
-    Attributes
-    ----------------
-    name : 'guassian'
-        The name of this distribution.
 
     Examples
     --------
@@ -137,6 +133,46 @@ class Gaussian(bounded.BoundedDist):
     def var(self):
         return self._var
 
+    def _normalcdf(self, param, value):
+        """The CDF of the normal distribution, without bounds."""
+        mu = self._mean[param]
+        var = self._var[param]
+        return 0.5*(1. + erf((value - mu)/(2*var)**0.5))
+
+    def cdf(self, param, value):
+        """Returns the CDF of the given parameter value."""
+        a, b = self._bounds[param]
+        if a != -numpy.inf:
+            phi_a = self._normalcdf(param, a)
+        else:
+            phi_a = 0.
+        if b != numpy.inf:
+            phi_b = self._normalcdf(param, b)
+        else:
+            phi_b = 1.
+        phi_x = self._normalcdf(param, value)
+        return (phi_x - phi_a)/(phi_b - phi_a)
+
+    def _normalcdfinv(self, param, p):
+        """The inverse CDF of the normal distribution, without bounds."""
+        mu = self._mean[param]
+        var = self._var[param]
+        return mu + (2*var)**0.5 * erfinv(2*p - 1.)
+
+    def _cdfinv_param(self, param, p):
+        """Return inverse of the CDF.
+        """
+        a, b = self._bounds[param]
+        if a != -numpy.inf:
+            phi_a = self._normalcdf(param, a)
+        else:
+            phi_a = 0.
+        if b != numpy.inf:
+            phi_b = self._normalcdf(param, b)
+        else:
+            phi_b = 1.
+        adjusted_p = phi_a + p * (phi_b - phi_a)
+        return self._normalcdfinv(param, adjusted_p)
 
     def _pdf(self, **kwargs):
         """Returns the pdf at the given values. The keyword arguments must
@@ -157,40 +193,6 @@ class Gaussian(bounded.BoundedDist):
                         for p in self._params])
         else:
             return -numpy.inf
-
-
-    def rvs(self, size=1, param=None):
-        """Gives a set of random values drawn from this distribution.
-
-        Parameters
-        ----------
-        size : {1, int}
-            The number of values to generate; default is 1.
-        param : {None, string}
-            If provided, will just return values for the given parameter.
-            Otherwise, returns random values for each parameter.
-
-        Returns
-        -------
-        structured array
-            The random values in a numpy structured array. If a param was
-            specified, the array will only have an element corresponding to the
-            given parameter. Otherwise, the array will have an element for each
-            parameter in self's params.
-        """
-        if param is not None:
-            dtype = [(param, float)]
-        else:
-            dtype = [(p, float) for p in self.params]
-        arr = numpy.zeros(size, dtype=dtype)
-        for (p,_) in dtype:
-            sigma = numpy.sqrt(self._var[p])
-            mu = self._mean[p]
-            a,b = self._bounds[p]
-            arr[p][:] = scipy.stats.truncnorm.rvs((a-mu)/sigma, (b-mu)/sigma,
-                loc=self._mean[p], scale=sigma, size=size)
-        return arr
-
 
     @classmethod
     def from_config(cls, cp, section, variable_args):
@@ -228,7 +230,7 @@ class Gaussian(bounded.BoundedDist):
 
         Returns
         -------
-        Gaussain
+        Gaussian
             A distribution instance from the pycbc.inference.prior module.
         """
         return bounded.bounded_from_config(cls, cp, section, variable_args,

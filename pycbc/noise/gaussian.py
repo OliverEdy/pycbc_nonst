@@ -26,11 +26,14 @@
 """This module contains functions to generate gaussian noise colored with a
 noise spectrum.
 """
+
+from pycbc import libutils
 from pycbc.types import TimeSeries, zeros
 from pycbc.types import complex_same_precision_as, FrequencySeries
-from lalsimulation import SimNoise
 import lal
 import numpy.random
+
+lalsimulation = libutils.import_optional('lalsimulation')
 
 def frequency_noise_from_psd(psd, seed=None):
     """ Create noise with a given psd.
@@ -110,11 +113,12 @@ def noise_from_psd(length, delta_t, psd, seed=None):
 
     psd = (psd[0:n]).lal()
     psd.data.data[n-1] = 0
+    psd.data.data[0] = 0
 
     segment = TimeSeries(zeros(N), delta_t=delta_t).lal()
     length_generated = 0
 
-    SimNoise(segment, 0, psd, randomness)
+    lalsimulation.SimNoise(segment, 0, psd, randomness)
     while (length_generated < length):
         if (length_generated + stride) < length:
             noise_ts.data[length_generated:length_generated+stride] = segment.data.data[0:stride]
@@ -122,7 +126,7 @@ def noise_from_psd(length, delta_t, psd, seed=None):
             noise_ts.data[length_generated:length] = segment.data.data[0:length-length_generated]
 
         length_generated += stride
-        SimNoise(segment, stride, psd, randomness)
+        lalsimulation.SimNoise(segment, stride, psd, randomness)
 
     return noise_ts
 

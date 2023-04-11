@@ -15,19 +15,23 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 import logging, os.path
-import urlparse, urllib
-import distutils.spawn
-from pycbc.workflow.core import Executable, FileList, Node, makedir, File, Workflow
+from ligo import segments
+from pycbc.workflow.core import Executable, FileList
+from pycbc.workflow.core import makedir, resolve_url_to_file
 from pycbc.workflow.plotting import PlotExecutable, requirestr, excludestr
-from itertools import izip_longest
-from Pegasus import DAX3 as dax
-from pycbc.workflow import pegasus_workflow as wdax
+try:
+    # Python 3
+    from itertools import zip_longest
+except ImportError:
+    # Python 2
+    from itertools import izip_longest as zip_longest
+from pycbc.workflow.pegasus_workflow import SubWorkflow
 
 def grouper(iterable, n, fillvalue=None):
     """ Create a list of n length tuples
     """
     args = [iter(iterable)] * n
-    return izip_longest(*args, fillvalue=fillvalue)
+    return zip_longest(*args, fillvalue=fillvalue)
 
 def setup_foreground_minifollowups(workflow, coinc_file, single_triggers,
                        tmpltbank_file, insp_segs, insp_data_name,
@@ -77,30 +81,31 @@ def setup_foreground_minifollowups(workflow, coinc_file, single_triggers,
     config_path = os.path.abspath(dax_output + '/' + '_'.join(tags) + 'foreground_minifollowup.ini')
     workflow.cp.write(open(config_path, 'w'))
 
-    config_file = wdax.File(os.path.basename(config_path))
-    config_file.PFN(urlparse.urljoin('file:', urllib.pathname2url(config_path)),
-                    site='local')
+    config_file = resolve_url_to_file(config_path)
 
-    exe = Executable(workflow.cp, 'foreground_minifollowup', ifos=workflow.ifos, out_dir=dax_output)
+    exe = Executable(workflow.cp, 'foreground_minifollowup',
+                     ifos=workflow.ifos, out_dir=dax_output, tags=tags)
 
     node = exe.create_node()
     node.add_input_opt('--config-files', config_file)
     node.add_input_opt('--bank-file', tmpltbank_file)
     node.add_input_opt('--statmap-file', coinc_file)
-    node.add_multiifo_input_list_opt('--single-detector-triggers', single_triggers)
+    node.add_multiifo_input_list_opt('--single-detector-triggers',
+                                     single_triggers)
     node.add_input_opt('--inspiral-segments', insp_segs)
     node.add_opt('--inspiral-data-read-name', insp_data_name)
     node.add_opt('--inspiral-data-analyzed-name', insp_anal_name)
-    node.new_output_file_opt(workflow.analysis_time, '.dax', '--output-file', tags=tags)
-    node.new_output_file_opt(workflow.analysis_time, '.dax.map', '--output-map', tags=tags)
-    node.new_output_file_opt(workflow.analysis_time, '.tc.txt', '--transformation-catalog', tags=tags)
+    if tags:
+        node.add_list_opt('--tags', tags)
+    node.new_output_file_opt(workflow.analysis_time, '.dax', '--dax-file')
+    node.new_output_file_opt(workflow.analysis_time, '.dax.map', '--output-map')
 
     name = node.output_files[0].name
     map_file = node.output_files[1]
-    tc_file = node.output_files[2]
 
     node.add_opt('--workflow-name', name)
     node.add_opt('--output-dir', out_dir)
+    node.add_opt('--dax-file-directory', '.')
 
     workflow += node
 
@@ -108,24 +113,20 @@ def setup_foreground_minifollowups(workflow, coinc_file, single_triggers,
     fil = node.output_files[0]
 
     # determine if a staging site has been specified
-    try:
-        staging_site = workflow.cp.get('workflow-foreground_minifollowups',
-                                       'staging-site')
-    except:
-        staging_site = None
-
-    job = dax.DAX(fil)
-    job.addArguments('--basename %s' % os.path.splitext(os.path.basename(name))[0])
-    Workflow.set_job_properties(job, map_file, tc_file, staging_site=staging_site)
-    workflow._adag.addJob(job)
-    dep = dax.Dependency(parent=node._dax_node, child=job)
-    workflow._adag.addDependency(dep)
+    job = SubWorkflow(fil.name, is_planned=False)
+    input_files = [tmpltbank_file, coinc_file, insp_segs] + single_triggers
+    job.add_inputs(*input_files)
+    job.set_subworkflow_properties(map_file,
+                                   staging_site=workflow.staging_site,
+                                   cache_file=workflow.cache_file)
+    job.add_into_workflow(workflow)
     logging.info('Leaving minifollowups module')
 
 def setup_single_det_minifollowups(workflow, single_trig_file, tmpltbank_file,
-                                  insp_segs, insp_data_name, insp_anal_name,
-                                  dax_output, out_dir, veto_file=None,
-                                  veto_segment_name=None, tags=None):
+                                   insp_segs, insp_data_name, insp_anal_name,
+                                   dax_output, out_dir, veto_file=None,
+                                   veto_segment_name=None, statfiles=None,
+                                   tags=None):
     """ Create plots that followup the Nth loudest clustered single detector
     triggers from a merged single detector trigger HDF file.
 
@@ -145,6 +146,9 @@ def setup_single_det_minifollowups(workflow, single_trig_file, tmpltbank_file,
         The name of the segmentlist storing data analyzed.
     out_dir: path
         The directory to store minifollowups result plots and files
+    statfiles: FileList (optional, default=None)
+        Supplementary files necessary for computing the single-detector
+        statistic.
     tags: {None, optional}
         Tags to add to the minifollowups executables
     Returns
@@ -171,14 +175,10 @@ def setup_single_det_minifollowups(workflow, single_trig_file, tmpltbank_file,
                                    '_'.join(tags) + 'singles_minifollowup.ini')
     workflow.cp.write(open(config_path, 'w'))
 
-    config_file = wdax.File(os.path.basename(config_path))
-    config_file.PFN(urlparse.urljoin('file:', urllib.pathname2url(config_path)),
-                    site='local')
+    config_file = resolve_url_to_file(config_path)
 
     exe = Executable(workflow.cp, 'singles_minifollowup',
                      ifos=curr_ifo, out_dir=dax_output, tags=tags)
-
-    wikifile = curr_ifo + '_'.join(tags) + 'loudest_table.txt'
 
     node = exe.create_node()
     node.add_input_opt('--config-files', config_file)
@@ -188,41 +188,42 @@ def setup_single_det_minifollowups(workflow, single_trig_file, tmpltbank_file,
     node.add_opt('--inspiral-data-read-name', insp_data_name)
     node.add_opt('--inspiral-data-analyzed-name', insp_anal_name)
     node.add_opt('--instrument', curr_ifo)
-    node.add_opt('--wiki-file', wikifile)
     if veto_file is not None:
         assert(veto_segment_name is not None)
         node.add_input_opt('--veto-file', veto_file)
         node.add_opt('--veto-segment-name', veto_segment_name)
-    node.new_output_file_opt(workflow.analysis_time, '.dax', '--output-file', tags=tags)
-    node.new_output_file_opt(workflow.analysis_time, '.dax.map', '--output-map', tags=tags)
-    node.new_output_file_opt(workflow.analysis_time, '.tc.txt', '--transformation-catalog', tags=tags)
+    if statfiles:
+        statfiles = statfiles.find_output_with_ifo(curr_ifo)
+        node.add_input_list_opt('--statistic-files', statfiles)
+    if tags:
+        node.add_list_opt('--tags', tags)
+    node.new_output_file_opt(workflow.analysis_time, '.dax', '--dax-file')
+    node.new_output_file_opt(workflow.analysis_time, '.dax.map',
+                             '--output-map')
 
     name = node.output_files[0].name
     map_file = node.output_files[1]
-    tc_file = node.output_files[2]
 
     node.add_opt('--workflow-name', name)
     node.add_opt('--output-dir', out_dir)
+    node.add_opt('--dax-file-directory', '.')
 
     workflow += node
 
     # execute this in a sub-workflow
     fil = node.output_files[0]
 
-    # determine if a staging site has been specified
-    try:
-        staging_site = workflow.cp.get('workflow-sngl_minifollowups',
-                                       'staging-site')
-    except:
-        staging_site = None
-
-    job = dax.DAX(fil)
-    job.addArguments('--basename %s' \
-                     % os.path.splitext(os.path.basename(name))[0])
-    Workflow.set_job_properties(job, map_file, tc_file, staging_site=staging_site)
-    workflow._adag.addJob(job)
-    dep = dax.Dependency(parent=node._dax_node, child=job)
-    workflow._adag.addDependency(dep)
+    job = SubWorkflow(fil.name, is_planned=False)
+    input_files = [tmpltbank_file, insp_segs, single_trig_file]
+    if veto_file is not None:
+        input_files.append(veto_file)
+    if statfiles:
+        input_files += statfiles
+    job.add_inputs(*input_files)
+    job.set_subworkflow_properties(map_file,
+                                   staging_site=workflow.staging_site,
+                                   cache_file=workflow.cache_file)
+    job.add_into_workflow(workflow)
     logging.info('Leaving minifollowups module')
 
 
@@ -273,9 +274,7 @@ def setup_injection_minifollowups(workflow, injection_file, inj_xml_file,
     config_path = os.path.abspath(dax_output + '/' + '_'.join(tags) + 'injection_minifollowup.ini')
     workflow.cp.write(open(config_path, 'w'))
 
-    config_file = wdax.File(os.path.basename(config_path))
-    config_file.PFN(urlparse.urljoin('file:', urllib.pathname2url(config_path)),
-                    site='local')
+    config_file = resolve_url_to_file(config_path)
 
     exe = Executable(workflow.cp, 'injection_minifollowup', ifos=workflow.ifos, out_dir=dax_output)
 
@@ -288,59 +287,57 @@ def setup_injection_minifollowups(workflow, injection_file, inj_xml_file,
     node.add_input_opt('--inspiral-segments', insp_segs)
     node.add_opt('--inspiral-data-read-name', insp_data_name)
     node.add_opt('--inspiral-data-analyzed-name', insp_anal_name)
-    node.new_output_file_opt(workflow.analysis_time, '.dax', '--output-file', tags=tags)
+    if tags:
+        node.add_list_opt('--tags', tags)
+    node.new_output_file_opt(workflow.analysis_time, '.dax', '--dax-file', tags=tags)
     node.new_output_file_opt(workflow.analysis_time, '.dax.map', '--output-map', tags=tags)
-    node.new_output_file_opt(workflow.analysis_time, '.tc.txt', '--transformation-catalog', tags=tags)
 
     name = node.output_files[0].name
     map_file = node.output_files[1]
-    tc_file = node.output_files[2]
 
     node.add_opt('--workflow-name', name)
     node.add_opt('--output-dir', out_dir)
+    node.add_opt('--dax-file-directory', '.')
 
     workflow += node
 
     # execute this in a sub-workflow
     fil = node.output_files[0]
 
-    # determine if a staging site has been specified
-    try:
-        staging_site = workflow.cp.get('workflow-injection_minifollowups',
-                                       'staging-site')
-    except:
-        staging_site = None
+    job = SubWorkflow(fil.name, is_planned=False)
+    input_files = [tmpltbank_file, injection_file, inj_xml_file, insp_segs]
+    input_files += single_triggers
+    job.add_inputs(*input_files)
+    job.set_subworkflow_properties(map_file,
+                                   staging_site=workflow.staging_site,
+                                   cache_file=workflow.cache_file)
+    job.add_into_workflow(workflow)
 
-    job = dax.DAX(fil)
-    job.addArguments('--basename %s' % os.path.splitext(os.path.basename(name))[0])
-    Workflow.set_job_properties(job, map_file, tc_file, staging_site=staging_site)
-    workflow._adag.addJob(job)
-    dep = dax.Dependency(parent=node._dax_node, child=job)
-    workflow._adag.addDependency(dep)
     logging.info('Leaving injection minifollowups module')
 
 
 class SingleTemplateExecutable(PlotExecutable):
     """Class to be used for to create workflow.Executable instances for the
     pycbc_single_template executable. Basically inherits directly from
-    PlotExecutable but adds the file_input_options.
+    PlotExecutable.
     """
-    file_input_options = ['--gating-file']
+    time_dependent_options = ['--channel-name', '--frame-type']
 
 
 class SingleTimeFreqExecutable(PlotExecutable):
     """Class to be used for to create workflow.Executable instances for the
     pycbc_plot_singles_timefreq executable. Basically inherits directly from
-    PlotExecutable but adds the file_input_options.
+    PlotExecutable.
     """
-    file_input_options = ['--gating-file']
+    time_dependent_options = ['--channel-name', '--frame-type']
+
 
 class PlotQScanExecutable(PlotExecutable):
     """Class to be used for to create workflow.Executable instances for the
     pycbc_plot_qscan executable. Basically inherits directly from
-    PlotExecutable but adds the file_input_options.
+    PlotExecutable.
     """
-    file_input_options = ['--gating-file']
+    time_dependent_options = ['--channel-name', '--frame-type']
 
 
 def make_single_template_plots(workflow, segs, data_read_name, analyzed_name,
@@ -408,10 +405,17 @@ def make_single_template_plots(workflow, segs, data_read_name, analyzed_name,
     files = FileList([])
     for tag in secs:
         for ifo in workflow.ifos:
+            if params['%s_end_time' % ifo] == -1.0:
+                continue
             # Reanalyze the time around the trigger in each detector
-            node = SingleTemplateExecutable(workflow.cp, 'single_template',
-                                            ifos=[ifo], out_dir=out_dir,
-                                            tags=[tag] + tags).create_node()
+            curr_exe = SingleTemplateExecutable(workflow.cp, 'single_template',
+                                                ifos=[ifo], out_dir=out_dir,
+                                                tags=[tag] + tags)
+            start = int(params[ifo + '_end_time'])
+            end = start + 1
+            cseg = segments.segment([start, end])
+            node = curr_exe.create_node(valid_seg=cseg)
+
             if use_exact_inj_params:
                 node.add_opt('--use-params-of-closest-injection')
             else:
@@ -521,7 +525,7 @@ def make_inj_info(workflow, injection_file, injection_index, num, out_dir,
 
 def make_coinc_info(workflow, singles, bank, coinc, out_dir,
                     n_loudest=None, trig_id=None, file_substring=None,
-                    tags=None):
+                    sort_order=None, sort_var=None, tags=None):
     tags = [] if tags is None else tags
     makedir(out_dir)
     name = 'page_coincinfo'
@@ -531,6 +535,10 @@ def make_coinc_info(workflow, singles, bank, coinc, out_dir,
     node.add_input_list_opt('--single-trigger-files', singles)
     node.add_input_opt('--statmap-file', coinc)
     node.add_input_opt('--bank-file', bank)
+    if sort_order:
+        node.add_opt('--sort-order', sort_order)
+    if sort_var:
+        node.add_opt('--sort-variable', sort_var)
     if n_loudest is not None:
         node.add_opt('--n-loudest', str(n_loudest))
     if trig_id is not None:
@@ -543,7 +551,7 @@ def make_coinc_info(workflow, singles, bank, coinc, out_dir,
     return files
 
 def make_sngl_ifo(workflow, sngl_file, bank_file, trigger_id, out_dir, ifo,
-                  tags=None, rank=None):
+                  tags=None):
     """Setup a job to create sngl detector sngl ifo html summary snippet.
     """
     tags = [] if tags is None else tags
@@ -555,8 +563,6 @@ def make_sngl_ifo(workflow, sngl_file, bank_file, trigger_id, out_dir, ifo,
     node.add_input_opt('--single-trigger-file', sngl_file)
     node.add_input_opt('--bank-file', bank_file)
     node.add_opt('--trigger-id', str(trigger_id))
-    if rank is not None:
-        node.add_opt('--n-loudest', str(rank))
     node.add_opt('--instrument', ifo)
     node.new_output_file_opt(workflow.analysis_time, '.html', '--output-file')
     workflow += node
@@ -628,12 +634,13 @@ def make_qscan_plot(workflow, ifo, trig_time, out_dir, injection_file=None,
 
     curr_exe = PlotQScanExecutable(workflow.cp, name, ifos=[ifo],
                           out_dir=out_dir, tags=tags)
-    node = curr_exe.create_node()
 
     # Determine start/end times, using data segments if needed.
     # Begin by choosing "optimal" times
     start = trig_time - time_window
     end = trig_time + time_window
+    node = curr_exe.create_node(valid_seg=segments.segment([start, end]))
+
     # Then if data_segments is available, check against that, and move if
     # needed
     if data_segments is not None:
@@ -642,6 +649,15 @@ def make_qscan_plot(workflow, ifo, trig_time, out_dir, injection_file=None,
             if trig_time in seg:
                 data_seg = seg
                 break
+            elif trig_time == -1.0:
+                node.add_opt('--gps-start-time', int(trig_time))
+                node.add_opt('--gps-end-time', int(trig_time))
+                node.add_opt('--center-time', trig_time)
+                caption_string = "'No trigger in %s'" % ifo
+                node.add_opt('--plot-caption', caption_string)
+                node.new_output_file_opt(workflow.analysis_time, '.png', '--output-file')
+                workflow += node
+                return node.output_files
         else:
             err_msg = "Trig time {} ".format(trig_time)
             err_msg += "does not seem to lie within any data segments. "
@@ -716,14 +732,16 @@ def make_singles_timefreq(workflow, single, bank_file, trig_time, out_dir,
 
     curr_exe = SingleTimeFreqExecutable(workflow.cp, name, ifos=[single.ifo],
                           out_dir=out_dir, tags=tags)
-    node = curr_exe.create_node()
-    node.add_input_opt('--trig-file', single)
-    node.add_input_opt('--bank-file', bank_file)
 
     # Determine start/end times, using data segments if needed.
     # Begin by choosing "optimal" times
     start = trig_time - time_window
     end = trig_time + time_window
+
+    node = curr_exe.create_node(valid_seg=segments.segment([start, end]))
+    node.add_input_opt('--trig-file', single)
+    node.add_input_opt('--bank-file', bank_file)
+
     # Then if data_segments is available, check against that, and move if
     # needed
     if data_segments is not None:
@@ -732,6 +750,18 @@ def make_singles_timefreq(workflow, single, bank_file, trig_time, out_dir,
             if trig_time in seg:
                 data_seg = seg
                 break
+            elif trig_time == -1.0:
+                node.add_opt('--gps-start-time', int(trig_time))
+                node.add_opt('--gps-end-time', int(trig_time))
+                node.add_opt('--center-time', trig_time)
+
+                if veto_file:
+                    node.add_input_opt('--veto-file', veto_file)
+
+                node.add_opt('--detector', single.ifo)
+                node.new_output_file_opt(workflow.analysis_time, '.png', '--output-file')
+                workflow += node
+                return node.output_files
         else:
             err_msg = "Trig time {} ".format(trig_time)
             err_msg += "does not seem to lie within any data segments. "
@@ -771,17 +801,41 @@ def make_singles_timefreq(workflow, single, bank_file, trig_time, out_dir,
     workflow += node
     return node.output_files
 
-def create_noop_node():
+def make_skipped_html(workflow, skipped_data, out_dir, tags):
     """
-    Creates a noop node that can be added to a DAX doing nothing. The reason
-    for using this is if a minifollowups dax contains no triggers currently
-    the dax will contain no jobs and be invalid. By adding a noop node we
-    ensure that such daxes will actually run if one adds one such noop node.
-    Adding such a noop node into a workflow *more than once* will cause a
-    failure.
+    Make a html snippet from the list of skipped background coincidences
     """
-    exe = wdax.Executable('NOOP')
-    pfn = distutils.spawn.find_executable('true')
-    exe.add_pfn(pfn)
-    node = wdax.Node(exe)
-    return node
+    exe = Executable(workflow.cp, 'html_snippet',
+                     ifos=workflow.ifos, out_dir=out_dir, tags=tags)
+
+    node = exe.create_node()
+
+    parsed_data = {}
+    for ifo, time in skipped_data:
+        if ifo not in parsed_data:
+            parsed_data[ifo] = {}
+        if time not in parsed_data[ifo]:
+            parsed_data[ifo][time] = 1
+        else:
+            parsed_data[ifo][time] = parsed_data[ifo][time] + 1
+
+    n_events = len(skipped_data)
+    html_string = '"{} background events have been skipped '.format(n_events)
+    html_string += 'because one of their single triggers already appears '
+    html_string += 'in the events followed up above. '
+    html_string += 'Specifically, the following single detector triggers '
+    html_string += 'were found in these coincidences. '
+    html_template = '{} event at time {} appeared {} times. '
+    for ifo in parsed_data:
+        for time in parsed_data[ifo]:
+            n_occurances = parsed_data[ifo][time]
+            html_string += html_template.format(ifo, time, n_occurances)
+
+    html_string += '"'
+
+    node.add_opt('--html-text', html_string)
+    node.add_opt('--title', '"Events were skipped"')
+    node.new_output_file_opt(workflow.analysis_time, '.html', '--output-file')
+    workflow += node
+    files = node.output_files
+    return files

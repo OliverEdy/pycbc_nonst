@@ -30,6 +30,7 @@ import pycbc
 import unittest
 import pycbc.frame
 import numpy
+from astropy.utils.data import download_file
 import lal
 from pycbc.types import TimeSeries
 from utils import parse_args_cpu_only, simple_exit
@@ -38,6 +39,7 @@ from utils import parse_args_cpu_only, simple_exit
 parse_args_cpu_only("Frame I/O")
 
 class FrameTestBase(unittest.TestCase):
+    __test__ = False
     def setUp(self):
         numpy.random.seed(1023)
         self.size = pow(2,12)
@@ -61,7 +63,9 @@ class FrameTestBase(unittest.TestCase):
         # TODO also test reading a cache
 
         # This is a file in the temp directory that will be deleted when it is garbage collected
-        filename = "data/frametest" + str(self.data1.dtype) + ".gwf"
+        url = 'https://github.com/gwastro/pycbc-config/raw/master/'
+        url += 'test_data_files/frametest{}.gwf'
+        filename = download_file(url.format(self.data1.dtype), cache=True)
 
         # Make sure we can run from one directory higher as well
         import os.path
@@ -136,7 +140,10 @@ types = [numpy.float32, numpy.float64, numpy.complex64, numpy.complex128]
 
 for ty in types:
     klass = type('{0}_Test'.format(ty.__name__),(FrameTestBase,),{'dtype': ty})
+    klass.__test__ = True
+    vars()[klass.__name__] = klass
     TestClasses.append(klass)
+    del klass
 
 if __name__ == '__main__':
     suite = unittest.TestSuite()

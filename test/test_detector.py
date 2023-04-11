@@ -22,9 +22,9 @@
 # =============================================================================
 #
 """
-These are the unittests for the pycbc.waveform module
+These are the unittests for the pycbc.detector module
 """
-from __future__ import print_function
+
 import pycbc.detector as det
 import unittest, numpy
 from numpy.random import uniform, seed
@@ -50,12 +50,12 @@ class TestDetector(unittest.TestCase):
     def test_light_time(self):
         for d1 in self.d:
             for d2 in self.d:
-                t1 = lal.LightTravelTime(d1.frDetector, d2.frDetector) * 1e-9
+                t1 = lal.LightTravelTime(d1.lal(), d2.lal()) * 1e-9
                 t2 = d1.light_travel_time_to_detector(d2)
                 self.assertAlmostEqual(t1, t2, 7)
 
     def test_antenna_pattern(self):
-        vals = zip(self.ra, self.dec, self.pol, self.time)
+        vals = list(zip(self.ra, self.dec, self.pol, self.time))
         for ifo in self.d:
             fp = []
             fc = []

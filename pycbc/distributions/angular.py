@@ -16,11 +16,8 @@
 This modules provides classes for evaluating angular distributions.
 """
 
+from configparser import Error
 import numpy
-try:
-    from ConfigParser import Error
-except ImportError:
-    from configparser import Error
 from pycbc import VARARGS_DELIM
 from pycbc import boundaries
 from pycbc.distributions import bounded
@@ -35,8 +32,7 @@ class UniformAngle(uniform.Uniform):
     `cyclic_domain` parameter.
 
     Bounds may be provided to limit the range for which the pdf has support.
-    If provided, the parameter bounds are initialized as multiples of pi,
-    while the stored bounds are in radians.
+    If provided, the parameter bounds are in radians.
 
     Parameters
     ----------
@@ -48,19 +44,8 @@ class UniformAngle(uniform.Uniform):
         The keyword arguments should provide the names of parameters and
         (optionally) their corresponding bounds, as either
         `boundaries.Bounds` instances or tuples. The bounds must be
-        in [0,2). These are converted to radians for storage. None may also
+        in [0,2PI). These are converted to radians for storage. None may also
         be passed; in that case, the domain bounds will be used.
-
-    Attributes
-    ----------
-    name : 'uniform_angle'
-        The name of this distribution.
-    params : list of strings
-        The list of parameter names.
-    bounds : dict
-        A dictionary of the parameter names and their bounds, in radians.
-    domain : boundaries.Bounds
-        The domain of the distribution.
 
     Notes
     ------
@@ -82,18 +67,18 @@ class UniformAngle(uniform.Uniform):
                 bnds = self._domain
             elif isinstance(bnds, boundaries.Bounds):
                 # convert to radians
-                bnds._min = bnds._min.__class__(bnds._min * numpy.pi)
-                bnds._max = bnds._max.__class__(bnds._max * numpy.pi)
+                bnds._min = bnds._min.__class__(bnds._min)
+                bnds._max = bnds._max.__class__(bnds._max)
             else:
                 # create a Bounds instance from the given tuple
-                bnds = boundaries.Bounds(
-                    bnds[0]*numpy.pi, bnds[1]*numpy.pi)
+                bnds = boundaries.Bounds(bnds[0], bnds[1])
             # check that the bounds are in the domain
             if bnds.min < self._domain.min or bnds.max > self._domain.max:
                 raise ValueError("bounds must be in [{x},{y}); "
-                    "got [{a},{b})".format(x=self._domain.min/numpy.pi,
-                    y=self._domain.max/numpy.pi, a=bnds.min/numpy.pi,
-                    b=bnds.max/numpy.pi))
+                    "got [{a},{b})".format(x=self._domain.min,
+                    y=self._domain.max, a=bnds.min,
+                    b=bnds.max))
+
             # update
             params[p] = bnds
         super(UniformAngle, self).__init__(**params)
@@ -121,7 +106,7 @@ class UniformAngle(uniform.Uniform):
         """
         # map values to be within the domain
         kwargs = dict([[p, self._domain.apply_conditions(val)]
-                      for p,val in kwargs.items()])
+                      for p,val in kwargs.items() if p in self._bounds])
         # now apply additional conditions
         return super(UniformAngle, self).apply_boundary_conditions(**kwargs)
 
@@ -190,8 +175,7 @@ class SinAngle(UniformAngle):
     The domain of this distribution is `[0, pi]`. This is accomplished by
     putting hard boundaries at `[0, pi]`. Bounds may be provided to further
     limit the range for which the pdf has support.  As with `UniformAngle`,
-    these are initizliaed as multiples of pi, while the stored bounds are in
-    radians.
+    these are initialized in radians.
 
     Parameters
     ----------
@@ -199,17 +183,8 @@ class SinAngle(UniformAngle):
         The keyword arguments should provide the names of parameters and
         (optionally) their corresponding bounds, as either
         `boundaries.Bounds` instances or tuples. The bounds must be
-        in [0,1]. These are converted to radians for storage. None may also
+        in [0,PI]. These are converted to radians for storage. None may also
         be passed; in that case, the domain bounds will be used.
-
-    Attributes
-    ----------
-    name : 'sin_angle'
-        The name of this distribution.
-    params : list of strings
-        The list of parameter names.
-    bounds : dict
-        A dictionary of the parameter names and their bounds, in radians.
     """
     name = 'sin_angle'
     _func = numpy.cos
@@ -227,6 +202,15 @@ class SinAngle(UniformAngle):
             abs(self._func(bnd[1]) - self._func(bnd[0]))) \
             for bnd in self._bounds.values()])
         self._norm = numpy.exp(self._lognorm)
+
+    def _cdfinv_param(self, arg, value):
+        """Return inverse of cdf for mapping unit interval to parameter bounds.
+        """
+        scale = (numpy.cos(self._bounds[arg][0])
+                 - numpy.cos(self._bounds[arg][1]))
+        offset = 1. + numpy.cos(self._bounds[arg][1]) / scale
+        new_value = numpy.arccos(-scale * (value - offset))
+        return new_value
 
     def _pdf(self, **kwargs):
         """Returns the pdf at the given values. The keyword arguments must
@@ -251,38 +235,6 @@ class SinAngle(UniformAngle):
                 numpy.array([kwargs[p] for p in self._params]))).sum()
 
 
-    def rvs(self, size=1, param=None):
-        """Gives a set of random values drawn from this distribution.
-
-        Parameters
-        ----------
-        size : {1, int}
-            The number of values to generate; default is 1.
-        param : {None, string}
-            If provided, will just return values for the given parameter.
-            Otherwise, returns random values for each parameter.
-
-        Returns
-        -------
-        structured array
-            The random values in a numpy structured array. If a param was
-            specified, the array will only have an element corresponding to the
-            given parameter. Otherwise, the array will have an element for each
-            parameter in self's params.
-        """
-        if param is not None:
-            dtype = [(param, float)]
-        else:
-            dtype = [(p, float) for p in self.params]
-        arr = numpy.zeros(size, dtype=dtype)
-        for (p,_) in dtype:
-            arr[p] = self._arcfunc(numpy.random.uniform(
-                                    self._func(self._bounds[p][0]),
-                                    self._func(self._bounds[p][1]),
-                                    size=size))
-        return arr
-
-
 class CosAngle(SinAngle):
     r"""A cosine distribution. This is the same thing as a sine distribution,
     but with the domain shifted to `[-pi/2, pi/2]`. See SinAngle for more
@@ -294,23 +246,21 @@ class CosAngle(SinAngle):
         The keyword arguments should provide the names of parameters and
         (optionally) their corresponding bounds, as either
         `boundaries.Bounds` instances or tuples. The bounds must be
-        in [-0.5, 0.5]. These are converted to radians for storage.
-        None may also be passed; in that case, the domain bounds will be used.
-
-    Attributes
-    ----------------
-    name : 'cos_angle'
-        The name of this distribution.
-    params : list of strings
-        The list of parameter names.
-    bounds : dict
-        A dictionary of the parameter names and their bounds, in radians.
+        in [-PI/2, PI/2].
     """
     name = 'cos_angle'
     _func = numpy.sin
     _dfunc = numpy.cos
     _arcfunc = numpy.arcsin
     _domainbounds = (-numpy.pi/2, numpy.pi/2)
+
+    def _cdfinv_param(self, param, value):
+        a = self._bounds[param][0]
+        b = self._bounds[param][1]
+        scale = numpy.sin(b) - numpy.sin(a)
+        offset = 1. - numpy.sin(b)/(numpy.sin(b) - numpy.sin(a))
+        new_value = numpy.arcsin((value - offset) * scale)
+        return new_value
 
 
 class UniformSolidAngle(bounded.BoundedDist):
@@ -339,23 +289,6 @@ class UniformSolidAngle(bounded.BoundedDist):
         values are constrained to be in [0, 2pi) using cyclic boundaries prior
         to applying any other boundary conditions and prior to evaluating the
         pdf. Default is False.
-
-    Attributes
-    ----------
-    name : 'uniform_solidangle'
-        The name of the distribution.
-    bounds : dict
-        The bounds on each angle. The keys are the names of the polar and
-        azimuthal angles, the values are the minimum and maximum of each, in
-        radians. For example, if the distribution was initialized with
-        `polar_angle='theta', polar_bounds=(0,0.5)` then the bounds will have
-        `'theta': 0, 1.5707963267948966` as an entry.
-    params : list
-        The names of the polar and azimuthal angles.
-    polar_angle : str
-        The name of the polar angle.
-    azimuthal_angle : str
-        The name of the azimuthal angle.
     """
     name = 'uniform_solidangle'
     _polardistcls = SinAngle
@@ -381,16 +314,31 @@ class UniformSolidAngle(bounded.BoundedDist):
         self._bounds.update(self._azimuthaldist.bounds)
         self._params = sorted(self._bounds.keys())
 
+    @property
+    def bounds(self):
+        """dict: The bounds on each angle. The keys are the names of the polar
+        and azimuthal angles, the values are the minimum and maximum of each,
+        in radians. For example, if the distribution was initialized with
+        `polar_angle='theta', polar_bounds=(0,0.5)` then the bounds will have
+        `'theta': 0, 1.5707963267948966` as an entry."""
+        return self._bounds
 
     @property
     def polar_angle(self):
+        """str: The name of the polar angle."""
         return self._polar_angle
-
 
     @property
     def azimuthal_angle(self):
+        """str: The name of the azimuthal angle."""
         return self._azimuthal_angle
 
+    def _cdfinv_param(self, param, value):
+        """ Return the cdfinv for a single given parameter """
+        if param == self.polar_angle:
+            return self._polardist._cdfinv_param(param, value)
+        elif param == self.azimuthal_angle:
+            return self._azimuthaldist._cdfinv_param(param, value)
 
     def apply_boundary_conditions(self, **kwargs):
         """Maps the given values to be within the domain of the azimuthal and
@@ -458,40 +406,6 @@ class UniformSolidAngle(bounded.BoundedDist):
         """
         return self._polardist._logpdf(**kwargs) +\
             self._azimuthaldist._logpdf(**kwargs)
-
-
-    def rvs(self, size=1, param=None):
-        """Gives a set of random values drawn from this distribution.
-
-        Parameters
-        ----------
-        size : {1, int}
-            The number of values to generate; default is 1.
-        param : {None, string}
-            If provided, will just return values for the given parameter.
-            Otherwise, returns random values for each parameter.
-
-        Returns
-        -------
-        structured array
-            The random values in a numpy structured array. If a param was
-            specified, the array will only have an element corresponding to the
-            given parameter. Otherwise, the array will have an element for each
-            parameter in self's params.
-        """
-        if param is not None:
-            dtype = [(param, float)]
-        else:
-            dtype = [(p, float) for p in self.params]
-        arr = numpy.zeros(size, dtype=dtype)
-        for (p,_) in dtype:
-            if p == self._polar_angle:
-                arr[p] = self._polardist.rvs(size=size)
-            elif p == self._azimuthal_angle:
-                arr[p] = self._azimuthaldist.rvs(size=size)
-            else:
-                raise ValueError("unrecognized parameter %s" %(p))
-        return arr
 
     @classmethod
     def from_config(cls, cp, section, variable_args):

@@ -12,7 +12,6 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
 # Public License for more details.
 
-from __future__ import division
 
 import sys, h5py
 import argparse, logging
@@ -25,17 +24,17 @@ import copy, numpy as np
 from scipy import stats as scistats
 
 from pycbc import io, events, bin_utils, results
-from pycbc.events import trigger_fits as trstats
-from pycbc.events.stat import sngl_statistic_dict
+from pycbc.events import triggers
+from pycbc.events import ranking
 import pycbc.version
 
 #### DEFINITIONS AND FUNCTIONS ####
 
 def get_stat(statchoice, trigs):
-    # Initialize statclass with an empty file list. In general could feed it
-    # files here for statistics which need that.
-    stat_instance = sngl_statistic_dict[statchoice]([])
-    return stat_instance.single(trigs)
+    # For now this is using the single detector ranking. If we want, this
+    # could use the Stat classes in stat.py using similar code as in hdf/io.py
+    # This requires additional options, so only change this if it's useful!
+    return ranking.get_sngls_ranking_from_trigs(trigs, statname)
 
 #### MAIN ####
 
@@ -62,7 +61,7 @@ parser.add_argument("--gps-start-time", type=float,
 parser.add_argument("--gps-end-time", type=float,
                     help="End time up to which to load/plot triggers")
 parser.add_argument("--sngl-stat", default="new_snr",
-                    choices=sngl_statistic_dict.keys(),
+                    choices=ranking.sngls_ranking_function_dict.keys(),
                     help="Function of SNR and chisq to threshold on")
 parser.add_argument("--stat-factor", type=float,
                     help="Adjustable magic number used in some sngl "
@@ -184,7 +183,7 @@ if not args.gps_start_time:
 plottime = time - args.gps_start_time
 
 if args.thorne_limit:
-    m1, m2, s1z, s2z = trstats.get_masses(templatef, tid)
+    m1, m2, s1z, s2z = triggers.get_mass_spin(templatef, tid)
     inside = np.logical_and(abs(s1z) < 0.998, abs(s2z) < 0.998)
     #stat = stat[inside]
     tid = tid[inside]
@@ -200,13 +199,13 @@ def get_pars(args, tag, m1, m2, s1z, s2z):
         logging.info('Getting %s values for %i triggers' % (paramarg, len(m1)))
     except:
         pass
-    return trstats.get_param(paramarg, args, m1, m2, s1z, s2z)
+    return triggers.get_param(paramarg, args, m1, m2, s1z, s2z)
 
 # get binning params
 if trig_dur:
     binpars = tdur + args.min_duration
 else:
-    m1, m2, s1z, s2z = trstats.get_masses(templatef, tid)
+    m1, m2, s1z, s2z = triggers.get_mass_spin(templatef, tid)
     binpars = get_pars(args, 'bin', m1, m2, s1z, s2z)
 logging.info("Parameter range of triggers: %f - %f" %
                                                   (min(binpars), max(binpars)))
@@ -251,7 +250,7 @@ for i, lower, upper in zip(binind, pbins.lower(), pbins.upper()):
     bintemplates[i] = len(set(tid_inbin))
     times_inbin = plottime[pind == i]
     bincounts[i] = len(times_inbin)
-    print bincounts[i]
+    print(bincounts[i])
     if len(times_inbin) == 0:
         logging.info("No trigs in bin %f-%f", (lower, upper))
         continue
@@ -264,7 +263,7 @@ for i, lower, upper in zip(binind, pbins.lower(), pbins.upper()):
     else:
         yplot = kd(xplot) * bincounts[i] / bintemplates[i]
     minrate = min(minrate, yplot.max()/5e2)
-    print minrate
+    print(minrate)
     maxrate = max(maxrate, yplot.max())
     binlabel = r"%.3g - %.3g" % (lower, upper)
     plt.plot(xplot, yplot, '-', c=bincolors[i], label=binlabel)

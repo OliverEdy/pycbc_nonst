@@ -21,7 +21,7 @@ import numpy
 import os
 from pycbc.tmpltbank.lambda_mapping import get_ethinca_orders, pycbcValidOrdersHelpDescriptions
 from pycbc import pnutils
-from pycbc.tmpltbank.em_progenitors import load_ns_sequence
+from pycbc.neutron_stars import load_ns_sequence
 from pycbc.types import positive_float, nonnegative_float
 
 class IndentedHelpFormatterWithNL(argparse.ArgumentDefaultsHelpFormatter):
@@ -1088,7 +1088,7 @@ class ethincaParameters(object):
                 cutoff in pnutils.named_frequency_cutoffs.keys()):
             raise ValueError("Need a valid cutoff formula to calculate "
                              "ethinca! Possible values are "+
-                             str(pnutils.named_frequency_cutoffs.keys()))
+                             str(tuple(pnutils.named_frequency_cutoffs.keys())))
         if self.doEthinca and not freqStep:
             raise ValueError("Need to specify a cutoff frequency step to "
                              "calculate ethinca! (ethincaFreqStep)")
@@ -1139,7 +1139,7 @@ def insert_ethinca_metric_options(parser):
                     "order will be used as for the bank metric.")
     ethincaGroup.add_argument("--filter-cutoff",
                     default=None, 
-                    choices=pnutils.named_frequency_cutoffs.keys(),
+                    choices=tuple(pnutils.named_frequency_cutoffs.keys()),
                     help="Specify an upper frequency cutoff formula for the "
                     "ethinca metric calculation, and for the values of f_final"
                     " assigned to the templates.  REQUIRED if the "
@@ -1171,7 +1171,7 @@ def verify_ethinca_metric_options(opts, parser):
               pnutils.named_frequency_cutoffs.keys()):
         parser.error("Need a valid cutoff formula to calculate ethinca or "
                      "assign filter f_final values! Possible values are "
-                     +str(pnutils.named_frequency_cutoffs.keys()))
+                     +str(tuple(pnutils.named_frequency_cutoffs.keys())))
     if (opts.calculate_ethinca_metric or opts.calculate_time_metric_components)\
                                            and not opts.ethinca_frequency_step:
         parser.error("Need to specify a cutoff frequency step to calculate "

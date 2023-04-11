@@ -28,6 +28,9 @@ exponential_fit = expfit(xvals, alpha, thresh)
 # or access function by name
 exponential_fit_1 = fit_fn('exponential', xvals, alpha, thresh)
 
+# Use weighting factors to e.g. take decimation into account
+alpha, sigma_alpha = fit_above_thresh('exponential', snrs, weights=weights)
+
 # get the KS test statistic and p-value - see scipy.stats.kstest
 ks_stat, ks_pval = KS_test('exponential', snrs, alpha, thresh)
 
@@ -45,26 +48,48 @@ ks_stat, ks_pval = KS_test('exponential', snrs, alpha, thresh)
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
 # Public License for more details.
 
-from __future__ import division
+import logging
 import numpy
 from scipy.stats import kstest
-from pycbc import pnutils
-from pycbc import conversions
+
+def exponential_fitalpha(vals, thresh, w):
+    """
+    Maximum likelihood estimator for the fit factor for
+    an exponential decrease model
+    """
+    return 1. / (numpy.average(vals, weights=w) - thresh)
+
+
+def rayleigh_fitalpha(vals, thresh, w):
+    """
+    Maximum likelihood estimator for the fit factor for
+    a Rayleigh distribution of events
+    """
+    return 2. / (numpy.average(vals ** 2., weights=w) - thresh ** 2.)
+
+
+def power_fitalpha(vals, thresh, w):
+    """
+    Maximum likelihood estimator for the fit factor for
+    a power law model
+    """
+    return numpy.average(numpy.log(vals/thresh), weights=w) ** -1. + 1.
+
 
 fitalpha_dict = {
-    'exponential' : lambda vals, thresh : 1. / (numpy.mean(vals) - thresh),
-    'rayleigh'    : lambda vals, thresh : 2. / (numpy.mean(vals**2.) - thresh**2.),
-    'power'       : lambda vals, thresh : numpy.mean(numpy.log(vals/thresh))**-1. + 1.
+    'exponential' : exponential_fitalpha,
+    'rayleigh'    : rayleigh_fitalpha,
+    'power'       : power_fitalpha
 }
 
 # measurement standard deviation = (-d^2 log L/d alpha^2)^(-1/2)
 fitstd_dict = {
-    'exponential' : lambda vals, alpha : alpha / len(vals)**0.5,
-    'rayleigh'    : lambda vals, alpha : alpha / len(vals)**0.5,
-    'power'       : lambda vals, alpha : (alpha - 1.) / len(vals)**0.5
+    'exponential' : lambda weights, alpha : alpha / sum(weights) ** 0.5,
+    'rayleigh'    : lambda weights, alpha : alpha / sum(weights) ** 0.5,
+    'power'       : lambda weights, alpha : (alpha - 1.) / sum(weights) ** 0.5
 }
 
-def fit_above_thresh(distr, vals, thresh=None):
+def fit_above_thresh(distr, vals, thresh=None, weights=None):
     """
     Maximum likelihood fit for the coefficient alpha
 
@@ -83,6 +108,9 @@ def fit_above_thresh(distr, vals, thresh=None):
         Values to fit
     thresh : float
         Threshold to apply before fitting; if None, use min(vals)
+    weights: sequence of floats
+        Weighting factors to use for the values when fitting.
+        Default=None - all the same
 
     Returns
     -------
@@ -94,17 +122,37 @@ def fit_above_thresh(distr, vals, thresh=None):
     vals = numpy.array(vals)
     if thresh is None:
         thresh = min(vals)
+        above_thresh = numpy.ones_like(vals, dtype=bool)
     else:
-        vals = vals[vals >= thresh]
-    alpha = fitalpha_dict[distr](vals, thresh)
-    return alpha, fitstd_dict[distr](vals, alpha)
+        above_thresh = vals >= thresh
+        if numpy.count_nonzero(above_thresh) == 0:
+            # Nothing is above threshold - warn and return -1
+            logging.warning("No values are above the threshold, %.2f, "
+                            "maximum is %.2f.", thresh, vals.max())
+            return -1., -1.
+
+        vals = vals[above_thresh]
+
+    # Set up the weights
+    if weights is not None:
+        weights = numpy.array(weights)
+        w = weights[above_thresh]
+    else:
+        w = numpy.ones_like(vals)
+
+    alpha = fitalpha_dict[distr](vals, thresh, w)
+    return alpha, fitstd_dict[distr](w, alpha)
 
 
+# Variables:
+# x: the trigger stat value(s) at which to evaluate the function
+# a: slope parameter of the fit
+# t: lower threshold stat value
 fitfn_dict = {
-    'exponential' : lambda x, alpha, t : alpha * numpy.exp(-alpha * (x - t)),
-    'rayleigh' : lambda x, alpha, t : (alpha * x * \
-                                       numpy.exp(-alpha * (x**2 - t**2) / 2.)),
-    'power' : lambda x, alpha, t : (alpha - 1.) * x**(-alpha) * t**(alpha - 1.)
+    'exponential' : lambda x, a, t : a * numpy.exp(-a * (x - t)),
+    'rayleigh' : lambda x, a, t : (a * x * \
+                                   numpy.exp(-a * (x ** 2 - t ** 2) / 2.)),
+    'power' : lambda x, a, t : (a - 1.) * x ** (-a) * t ** (a - 1.)
 }
 
 def fit_fn(distr, xvals, alpha, thresh):
@@ -136,8 +184,8 @@ def fit_fn(distr, xvals, alpha, thresh):
 
 cum_fndict = {
     'exponential' : lambda x, alpha, t : numpy.exp(-alpha * (x - t)),
-    'rayleigh' : lambda x, alpha, t : numpy.exp(-alpha * (x**2. - t**2.) / 2.),
-    'power' : lambda x, alpha, t : x**(1. - alpha) * t**(alpha - 1.)
+    'rayleigh' : lambda x, alpha, t : numpy.exp(-alpha * (x ** 2. - t ** 2.) / 2.),
+    'power' : lambda x, alpha, t : x ** (1. - alpha) * t ** (alpha - 1.)
 }
 
 def cum_fit(distr, xvals, alpha, thresh):
@@ -165,7 +213,6 @@ def cum_fit(distr, xvals, alpha, thresh):
     # set fitted values below threshold to 0
     numpy.putmask(cum_fit, xvals < thresh, 0.)
     return cum_fit
-
 
 def tail_threshold(vals, N=1000):
     """Determine a threshold above which there are N louder values"""
@@ -214,73 +261,6 @@ def KS_test(distr, vals, alpha, thresh=None):
     return kstest(vals, cdf_fn)
 
 
-def get_masses(bank, tid):
-    """
-    Helper function
-
-    Parameters
-    ----------
-    bank : h5py File object
-        Bank parameter file
-    tid : integer or array of int
-        Indices of the entries to be returned
-
-    Returns
-    -------
-    m1, m2, s1z, s2z : tuple of floats or arrays of floats
-        Parameter values of the bank entries
-    """
-    m1 = bank['mass1'][:][tid]
-    m2 = bank['mass2'][:][tid]
-    s1z = bank['spin1z'][:][tid]
-    s2z = bank['spin2z'][:][tid]
-    return m1, m2, s1z, s2z
-
-
-def get_param(par, args, m1, m2, s1z, s2z):
-    """
-    Helper function
-
-    Parameters
-    ----------
-    par : string
-        Name of parameter to calculate
-    args : Namespace object returned from ArgumentParser instance
-        Calling code command line options, used for f_lower value
-    m1 : float or array of floats
-        First binary component mass (etc.)
-
-    Returns
-    -------
-    parvals : float or array of floats
-        Calculated parameter values
-    """
-    if par == 'mchirp':
-        parvals, _ = pnutils.mass1_mass2_to_mchirp_eta(m1, m2)
-    elif par == 'mtotal':
-        parvals = m1 + m2
-    elif par =='eta':
-        parvals = conversions.eta_from_mass1_mass2(m1, m2)
-    elif par in ['chi_eff', 'effective_spin']:
-        parvals = conversions.chi_eff(m1, m2, s1z, s2z)
-    elif par == 'template_duration':
-        # default to SEOBNRv4 duration function
-        parvals = pnutils.get_imr_duration(m1, m2, s1z, s2z, args.f_lower,
-                                           args.approximant or "SEOBNRv4")
-        if args.min_duration:
-            parvals += args.min_duration
-    elif par == 'tau0':
-        parvals = conversions.tau0_from_mass1_mass2(m1, m2, args.f_lower)
-    elif par == 'tau3':
-        parvals = conversions.tau3_from_mass1_mass2(m1, m2, args.f_lower)
-    elif par in pnutils.named_frequency_cutoffs.keys():
-        parvals = pnutils.frequency_cutoff_from_name(par, m1, m2, s1z, s2z)
-    else:
-        # try asking for a LALSimulation frequency function
-        parvals = pnutils.get_freq(par, m1, m2, s1z, s2z)
-    return parvals
-
-
 def which_bin(par, minpar, maxpar, nbins, log=False):
     """
     Helper function
@@ -310,7 +290,12 @@ def which_bin(par, minpar, maxpar, nbins, log=False):
     if log:
         par, minpar, maxpar = numpy.log(par), numpy.log(minpar), numpy.log(maxpar)
     # par lies some fraction of the way between min and max
-    frac = float(par - minpar) / float(maxpar - minpar)
+    if minpar != maxpar:
+        frac = float(par - minpar) / float(maxpar - minpar)
+    else:
+        # if they are equal there is only one size 0 bin
+        # must be in that bin
+        frac = 0
     # binind then lies between 0 and nbins - 1
     binind = int(frac * nbins)
     # corner case

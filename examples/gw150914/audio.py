@@ -2,12 +2,15 @@ from pycbc.frame import read_frame
 from pycbc.filter import highpass_fir, lowpass_fir
 from pycbc.psd import welch, interpolate
 from pycbc.types import TimeSeries
-import urllib
+try:
+    from urllib.request import urlretrieve
+except ImportError:  # python < 3
+    from urllib import urlretrieve
 
 # Read data and remove low frequency content
 fname = 'H-H1_LOSC_4_V2-1126259446-32.gwf'
 url = "https://www.gw-openscience.org/GW150914data/" + fname
-urllib.urlretrieve(url, filename=fname)
+urlretrieve(url, filename=fname)
 h1 = highpass_fir(read_frame(fname, 'H1:LOSC-STRAIN'), 15.0, 8)
 
 # Calculate the noise spectrum and whiten
@@ -24,6 +27,6 @@ fdata.roll(int(1200 / fdata.delta_f))
 smooth = TimeSeries(fdata.to_timeseries(), delta_t=1.0/1024)
 
 #Take slice around signal
-smooth = smooth[len(smooth)/2 - 1500:len(smooth)/2 + 3000]
+smooth = smooth[len(smooth)//2 - 1500:len(smooth)//2 + 3000]
 smooth.save_to_wav('gw150914_h1_chirp.wav')
 

@@ -18,10 +18,12 @@ import copy
 from ligo import segments
 from pycbc.psd.read import *
 from pycbc.psd.analytical import *
+from pycbc.psd.analytical_space import *
 from pycbc.psd.estimate import *
 from pycbc.psd.variation import *
 from pycbc.types import float32,float64
 from pycbc.types import MultiDetOptionAppendAction, MultiDetOptionAction
+from pycbc.types import DictOptionAction, MultiDetDictOptionAction
 from pycbc.types import copy_opts_for_single_ifo
 from pycbc.types import required_opts, required_opts_multi_ifo
 from pycbc.types import ensure_one_opt, ensure_one_opt_multi_ifo
@@ -58,14 +60,13 @@ def from_cli(opt, length, delta_f, low_frequency_cutoff,
         If 'single' the PSD will be converted to float32, if not already in
         that precision. If 'double' the PSD will be converted to float64, if
         not already in that precision.
-
     Returns
     -------
     psd : FrequencySeries
         The frequency series containing the PSD.
     """
     f_low = low_frequency_cutoff
-    sample_rate = int((length -1) * 2 * delta_f)
+    sample_rate = (length -1) * 2 * delta_f
 
     try:
         psd_estimation = opt.psd_estimation is not None
@@ -82,7 +83,8 @@ def from_cli(opt, length, delta_f, low_frequency_cutoff,
     if (opt.psd_model or opt.psd_file or opt.asd_file):
         # PSD from lalsimulation or file
         if opt.psd_model:
-            psd = from_string(opt.psd_model, length, delta_f, f_low)
+            psd = from_string(opt.psd_model, length, delta_f, f_low,
+                              **opt.psd_extra_args)
         elif opt.psd_file or opt.asd_file:
             if opt.asd_file:
                 psd_file_name = opt.asd_file
@@ -99,22 +101,24 @@ def from_cli(opt, length, delta_f, low_frequency_cutoff,
                 psd = from_xml(psd_file_name, length, delta_f, f_low,
                                ifo_string=opt.psd_file_xml_ifo_string,
                                root_name=opt.psd_file_xml_root_name)
-        # Set values < flow to the value at flow
+        # Set values < flow to the value at flow (if flow > 0)
         kmin = int(low_frequency_cutoff / psd.delta_f)
-        psd[0:kmin] = psd[kmin]
+        if kmin > 0:
+            psd[0:kmin] = psd[kmin]
 
         psd *= dyn_range_factor ** 2
 
     elif psd_estimation:
         # estimate PSD from data
         psd = welch(strain, avg_method=opt.psd_estimation,
-                    seg_len=int(opt.psd_segment_length * sample_rate),
-                    seg_stride=int(opt.psd_segment_stride * sample_rate),
+                    seg_len=int(opt.psd_segment_length * sample_rate + 0.5),
+                    seg_stride=int(opt.psd_segment_stride * sample_rate + 0.5),
                     num_segments=opt.psd_num_segments,
                     require_exact_data_fit=False)
 
         if delta_f != psd.delta_f:
             psd = interpolate(psd, delta_f)
+
     else:
         # Shouldn't be possible to get here
         raise ValueError("Shouldn't be possible to raise this!")
@@ -122,7 +126,8 @@ def from_cli(opt, length, delta_f, low_frequency_cutoff,
     if opt.psd_inverse_length:
         psd = inverse_spectrum_truncation(psd,
             int(opt.psd_inverse_length * sample_rate),
-            low_frequency_cutoff=f_low)
+            low_frequency_cutoff=f_low,
+            trunc_method=opt.invpsd_trunc_method)
 
     if hasattr(opt, 'psd_output') and opt.psd_output:
         (psd.astype(float64) / (dyn_range_factor ** 2)).save(opt.psd_output)
@@ -182,6 +187,11 @@ def insert_psd_option_group(parser, output=True, include_data_options=True):
     psd_options.add_argument("--psd-model",
                              help="Get PSD from given analytical model. ",
                              choices=get_psd_model_list())
+    psd_options.add_argument("--psd-extra-args",
+                             nargs='+', action=DictOptionAction,
+                             metavar='PARAM:VALUE', default={}, type=float,
+                             help="(optional) Extra arguments passed to "
+                             "the PSD models.")
     psd_options.add_argument("--psd-file",
                              help="Get PSD using given PSD ASCII file")
     psd_options.add_argument("--asd-file",
@@ -190,6 +200,11 @@ def insert_psd_option_group(parser, output=True, include_data_options=True):
                              help="(Optional) The maximum length of the "
                              "impulse response of the overwhitening "
                              "filter (s)")
+    psd_options.add_argument("--invpsd-trunc-method", default=None,
+                             choices=["hann"],
+                             help="(Optional) What truncation method to use "
+                                  "when applying psd-inverse-length. If not "
+                                  "provided, a hard truncation will be used.")
     # Options specific to XML PSD files
     psd_options.add_argument("--psd-file-xml-ifo-string",
                              help="If using an XML PSD file, use the PSD in "
@@ -204,24 +219,28 @@ def insert_psd_option_group(parser, output=True, include_data_options=True):
                                   "to you, then it is probably safe to "
                                   "ignore this option.")
     # Options for PSD variation
+    psd_options.add_argument("--psdvar-segment", type=float,
+                             metavar="SECONDS", help="Length of segment "
+                             "for mean square calculation of PSD variation.")
     psd_options.add_argument("--psdvar-short-segment", type=float,
                              metavar="SECONDS", help="Length of short segment "
-                             "when calculating the PSD variability.")
+                             "for outliers removal in PSD variability "
+                             "calculation.")
     psd_options.add_argument("--psdvar-long-segment", type=float,
                              metavar="SECONDS", help="Length of long segment "
                              "when calculating the PSD variability.")
-    psd_options.add_argument("--psdvar-short-psd-duration", type=float,
+    psd_options.add_argument("--psdvar-psd-duration", type=float,
                              metavar="SECONDS", help="Duration of short "
                              "segments for PSD estimation.")
-    psd_options.add_argument("--psdvar-short-psd-stride", type=float,
+    psd_options.add_argument("--psdvar-psd-stride", type=float,
                              metavar="SECONDS", help="Separation between PSD "
                              "estimation segments.")
     psd_options.add_argument("--psdvar-low-freq", type=float, metavar="HERTZ",
-                             help="Minimum frequency to consider in PSD "
-                             "comparison.")
+                             help="Minimum frequency to consider in strain "
+                             "bandpass.")
     psd_options.add_argument("--psdvar-high-freq", type=float, metavar="HERTZ",
-                             help="Maximum frequency to consider in PSD "
-                             "comparison.")
+                             help="Maximum frequency to consider in strain "
+                             "bandpass.")
 
     if include_data_options :
         psd_options.add_argument("--psd-estimation",
@@ -269,6 +288,11 @@ def insert_psd_option_group_multi_ifo(parser):
                           action=MultiDetOptionAction, metavar='IFO:MODEL',
                           help="Get PSD from given analytical model. "
                           "Choose from %s" %(', '.join(get_psd_model_list()),))
+    psd_options.add_argument("--psd-extra-args",
+                             nargs='+', action=MultiDetDictOptionAction,
+                             metavar='DETECTOR:PARAM:VALUE', default={},
+                             type=float, help="(optional) Extra arguments "
+                             "passed to the PSD models.")
     psd_options.add_argument("--psd-file", nargs="+",
                           action=MultiDetOptionAction, metavar='IFO:FILE',
                           help="Get PSD using given PSD ASCII file")
@@ -302,29 +326,38 @@ def insert_psd_option_group_multi_ifo(parser):
                           action=MultiDetOptionAction, metavar='IFO:LENGTH',
                           help="(Optional) The maximum length of the impulse"
                           " response of the overwhitening filter (s)")
+    psd_options.add_argument("--invpsd-trunc-method", default=None,
+                             choices=["hann"],
+                             help="(Optional) What truncation method to use "
+                                  "when applying psd-inverse-length. If not "
+                                  "provided, a hard truncation will be used.")
     psd_options.add_argument("--psd-output", nargs="+",
                           action=MultiDetOptionAction, metavar='IFO:FILE',
                           help="(Optional) Write PSD to specified file")
 
     # Options for PSD variation
+    psd_options.add_argument("--psdvar-segment", type=float,
+                             metavar="SECONDS", help="Length of segment "
+                             "when calculating the PSD variability.")
     psd_options.add_argument("--psdvar-short-segment", type=float,
                              metavar="SECONDS", help="Length of short segment "
-                             "when calculating the PSD variability.")
+                             "for outliers removal in PSD variability "
+                             "calculation.")
     psd_options.add_argument("--psdvar-long-segment", type=float,
                              metavar="SECONDS", help="Length of long segment "
                              "when calculating the PSD variability.")
-    psd_options.add_argument("--psdvar-short-psd-duration", type=float,
+    psd_options.add_argument("--psdvar-psd-duration", type=float,
                              metavar="SECONDS", help="Duration of short "
                              "segments for PSD estimation.")
-    psd_options.add_argument("--psdvar-short-psd-stride", type=float,
+    psd_options.add_argument("--psdvar-psd-stride", type=float,
                              metavar="SECONDS", help="Separation between PSD "
                              "estimation segments.")
     psd_options.add_argument("--psdvar-low-freq", type=float, metavar="HERTZ",
-                             help="Minimum frequency to consider in PSD "
-                             "comparison.")
+                             help="Minimum frequency to consider in strain "
+                             "bandpass.")
     psd_options.add_argument("--psdvar-high-freq", type=float, metavar="HERTZ",
-                             help="Maximum frequency to consider in PSD "
-                             "comparison.")
+                             help="Maximum frequency to consider in strain "
+                             "bandpass.")
 
     return psd_options
 
@@ -554,4 +587,3 @@ def associate_psds_to_multi_ifo_segments(opt, fd_segments, gwstrain, flen,
         associate_psds_to_single_ifo_segments(opt, segments, strain, flen,
                 delta_f, flow, ifo, dyn_range_factor=dyn_range_factor,
                 precision=precision)
-

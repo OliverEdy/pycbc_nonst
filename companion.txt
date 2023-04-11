@@ -1,6 +1,30 @@
 # other tools which may be useful
 gwpy>=0.8.1
+
 # HEALPix is very useful for some analysis.
 healpy
-# Needed for gracedb uploads
-ligo-gracedb
+
+# Needed for GraceDB uploads and skymap generation
+ligo-gracedb>=2.10.0
+ligo.skymap
+
+# Needed for ringdown
+pykerr
+
+# auxiliary samplers
+epsie>=1.0
+cpnest
+pymultinest
+ultranest
+https://github.com/willvousden/ptemcee/archive/master.tar.gz
+
+# useful to look at PyCBC Live with htop
+setproctitle
+
+# Needed for `population_models` module
+sympy>=1.9
+
+# Needed for KDE trigger statistics
+# FIXME Tito's fork to fix an awkde build error on Python 3.11
+git+https://github.com/titodalcanton/awkde.git@py311_fix
+scikit-learn

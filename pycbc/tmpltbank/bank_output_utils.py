@@ -1,103 +1,12 @@
-from __future__ import division
 import numpy
 from lal import PI, MTSUN_SI, TWOPI, GAMMA
-from glue.ligolw import ligolw, lsctables, ilwd, utils as ligolw_utils
-from glue.ligolw.utils import process as ligolw_process
+from ligo.lw import ligolw, lsctables, utils as ligolw_utils
 from pycbc import pnutils
 from pycbc.tmpltbank.lambda_mapping import ethinca_order_from_string
+from pycbc.io.ligolw import (
+    return_empty_sngl, return_search_summary, create_process_table
+)
 
-def return_empty_sngl(nones=False):
-    """
-    Function to create a SnglInspiral object where all columns are populated
-    but all are set to values that test False (ie. strings to '', floats/ints
-    to 0, ...). This avoids errors when you try to create a table containing
-    columns you don't care about, but which still need populating. NOTE: This
-    will also produce a process_id and event_id with 0 values. For most
-    applications these should be set to their correct values.
-
-    Parameters
-    ----------
-    nones : bool (False)
-        If True, just set all columns to None.
-
-    Returns
-    --------
-    lsctables.SnglInspiral
-        The "empty" SnglInspiral object.
-    """
-
-    sngl = lsctables.SnglInspiral()
-    cols = lsctables.SnglInspiralTable.validcolumns
-    if nones:
-        for entry in cols:
-            setattr(sngl, entry, None)
-    else:
-        for entry in cols.keys():
-            if cols[entry] in ['real_4','real_8']:
-                setattr(sngl,entry,0.)
-            elif cols[entry] == 'int_4s':
-                setattr(sngl,entry,0)
-            elif cols[entry] == 'lstring':
-                setattr(sngl,entry,'')
-            elif entry == 'process_id':
-                sngl.process_id = ilwd.ilwdchar("process:process_id:0")
-            elif entry == 'event_id':
-                sngl.event_id = ilwd.ilwdchar("sngl_inspiral:event_id:0")
-            else:
-                raise ValueError("Column %s not recognized" %(entry) )
-    return sngl
-
-def return_search_summary(start_time=0, end_time=0, nevents=0,
-                          ifos=None, **kwargs):
-    """
-    Function to create a SearchSummary object where all columns are populated
-    but all are set to values that test False (ie. strings to '', floats/ints
-    to 0, ...). This avoids errors when you try to create a table containing
-    columns you don't care about, but which still need populating. NOTE: This
-    will also produce a process_id with 0 values. For most applications these
-    should be set to their correct values.
-
-    It then populates columns if given them as options.
-
-    Returns
-    --------
-    lsctables.SeachSummary
-        The "empty" SearchSummary object.
-    """
-    if ifos is None:
-        ifos = []
-
-    # create an empty search summary
-    search_summary = lsctables.SearchSummary()
-    cols = lsctables.SearchSummaryTable.validcolumns
-    for entry in cols.keys():
-        if cols[entry] in ['real_4','real_8']:
-            setattr(search_summary,entry,0.)
-        elif cols[entry] == 'int_4s':
-            setattr(search_summary,entry,0)
-        elif cols[entry] == 'lstring':
-            setattr(search_summary,entry,'')
-        elif entry == 'process_id':
-            search_summary.process_id = ilwd.ilwdchar("process:process_id:0")
-        else:
-            raise ValueError("Column %s not recognized" %(entry) )
-
-    # fill in columns
-    if len(ifos):
-        search_summary.ifos = ','.join(ifos)
-    if nevents:
-        search_summary.nevents = nevents
-    if start_time and end_time:
-        search_summary.in_start_time = int(start_time)
-        search_summary.in_start_time_ns = int(start_time % 1 * 1e9)
-        search_summary.in_end_time = int(end_time)
-        search_summary.in_end_time_ns = int(end_time % 1 * 1e9)
-        search_summary.out_start_time = int(start_time)
-        search_summary.out_start_time_ns = int(start_time % 1 * 1e9)
-        search_summary.out_end_time = int(end_time)
-        search_summary.out_end_time_ns = int(end_time % 1 * 1e9)
-
-    return search_summary
 
 def convert_to_sngl_inspiral_table(params, proc_id):
     '''
@@ -109,7 +18,7 @@ def convert_to_sngl_inspiral_table(params, proc_id):
     params : iterable
         Each entry in the params iterable should be a sequence of
         [mass1, mass2, spin1z, spin2z] in that order
-    proc_id : ilwd char
+    proc_id : int
         Process ID to add to each row of the sngl_inspiral table
 
     Returns
@@ -202,7 +111,7 @@ def calculate_ethinca_metric_comps(metricParams, ethincaParams, mass1, mass2,
     # frequency for which moments were calculated
     fMax_theor = pnutils.frequency_cutoff_from_name(
         ethincaParams.cutoff, mass1, mass2, spin1z, spin2z)
-    fMaxes = metricParams.moments['J4'].keys()
+    fMaxes = list(metricParams.moments['J4'].keys())
     fMaxIdx = abs(numpy.array(fMaxes,dtype=float) - fMax_theor).argmin()
     fMax = fMaxes[fMaxIdx]
 
@@ -291,10 +200,10 @@ def calculate_ethinca_metric_comps(metricParams, ethincaParams, mass1, mass2,
 
 def output_sngl_inspiral_table(outputFile, tempBank, metricParams,
                                ethincaParams, programName="", optDict = None,
-                               outdoc=None, **kwargs):
+                               outdoc=None):
     """
-    Function that converts the information produced by the various pyCBC bank
-    generation codes into a valid LIGOLW xml file containing a sngl_inspiral
+    Function that converts the information produced by the various PyCBC bank
+    generation codes into a valid LIGOLW XML file containing a sngl_inspiral
     table and outputs to file.
 
     Parameters
@@ -320,9 +229,6 @@ def output_sngl_inspiral_table(outputFile, tempBank, metricParams,
     outdoc (key-word argument) : ligolw xml document
         If given add template bank to this representation of a xml document and
         write to disk. If not given create a new document.
-    kwargs : key-word arguments
-        All other key word arguments will be passed directly to
-        ligolw_process.register_to_xmldoc
     """
     if optDict is None:
         optDict = {}
@@ -336,8 +242,13 @@ def output_sngl_inspiral_table(outputFile, tempBank, metricParams,
         if optDict['channel_name'] is not None:
             ifos = [optDict['channel_name'][0:2]]
 
-    proc_id = ligolw_process.register_to_xmldoc(outdoc, programName, optDict,
-                                                ifos=ifos, **kwargs).process_id
+    proc = create_process_table(
+        outdoc,
+        program_name=programName,
+        detectors=ifos,
+        options=optDict
+    )
+    proc_id = proc.process_id
     sngl_inspiral_table = convert_to_sngl_inspiral_table(tempBank, proc_id)
     # Calculate Gamma components if needed
     if ethincaParams is not None:
@@ -353,7 +264,7 @@ def output_sngl_inspiral_table(outputFile, tempBank, metricParams,
                     spin2z=sngl.spin2z, full_ethinca=ethincaParams.full_ethinca)
                 # assign the upper frequency cutoff and Gamma0-5 values
                 sngl.f_final = fMax_theor
-                for i in xrange(len(GammaVals)):
+                for i in range(len(GammaVals)):
                     setattr(sngl, "Gamma"+str(i), GammaVals[i])
         # If Gamma metric components are not wanted, assign f_final from an
         # upper frequency cutoff specified in ethincaParams
@@ -380,11 +291,11 @@ def output_sngl_inspiral_table(outputFile, tempBank, metricParams,
 
     # make search summary table
     search_summary_table = lsctables.New(lsctables.SearchSummaryTable)
-    search_summary = return_search_summary(start_time, end_time,
-                               len(sngl_inspiral_table), ifos, **kwargs)
+    search_summary = return_search_summary(
+        start_time, end_time, len(sngl_inspiral_table), ifos
+    )
     search_summary_table.append(search_summary)
     outdoc.childNodes[0].appendChild(search_summary_table)
 
     # write the xml doc to disk
-    ligolw_utils.write_filename(outdoc, outputFile,
-                                gz=outputFile.endswith('.gz'))
+    ligolw_utils.write_filename(outdoc, outputFile)

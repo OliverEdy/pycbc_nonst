@@ -21,6 +21,7 @@
 #
 # =============================================================================
 #
+import functools
 import lal
 import numpy
 import scipy.signal
@@ -30,6 +31,25 @@ from pycbc.fft import ifft, fft
 
 _resample_func = {numpy.dtype('float32'): lal.ResampleREAL4TimeSeries,
                  numpy.dtype('float64'): lal.ResampleREAL8TimeSeries}
+
+@functools.lru_cache(maxsize=20)
+def cached_firwin(*args, **kwargs):
+    """Cache the FIR filter coefficients.
+    This is mostly done for PyCBC Live, which rapidly and repeatedly resamples data.
+    """
+    return scipy.signal.firwin(*args, **kwargs)
+
+
+# Change to True in front-end if you want this function to use caching
+# This is a mostly-hidden optimization option that most users will not want
+# to use. It is used in PyCBC Live
+USE_CACHING_FOR_LFILTER = False
+# If using caching we want output to be unique if called at different places
+# (and if called from different modules/functions), these unique IDs acheive
+# that. The numbers are not significant, only that they are unique.
+LFILTER_UNIQUE_ID_1 = 651273657
+LFILTER_UNIQUE_ID_2 = 154687641
+LFILTER_UNIQUE_ID_3 = 548946442
 
 def lfilter(coefficients, timeseries):
     """ Apply filter coefficients to a time series
@@ -47,35 +67,74 @@ def lfilter(coefficients, timeseries):
         filtered array
     """
     from pycbc.filter import correlate
+    fillen = len(coefficients)
 
     # If there aren't many points just use the default scipy method
     if len(timeseries) < 2**7:
-        if hasattr(timeseries, 'numpy'):
-            timeseries = timeseries.numpy()
         series = scipy.signal.lfilter(coefficients, 1.0, timeseries)
-        return series
-    else:
+        return TimeSeries(series,
+                          epoch=timeseries.start_time,
+                          delta_t=timeseries.delta_t)
+    elif (len(timeseries) < fillen * 10) or (len(timeseries) < 2**18):
+        from pycbc.strain.strain import create_memory_and_engine_for_class_based_fft
+        from pycbc.strain.strain import execute_cached_fft
+
         cseries = (Array(coefficients[::-1] * 1)).astype(timeseries.dtype)
         cseries.resize(len(timeseries))
-        cseries.roll(len(timeseries) - len(coefficients) + 1)
-        timeseries = Array(timeseries, copy=False)
+        cseries.roll(len(timeseries) - fillen + 1)
 
-        flen = len(cseries) / 2 + 1
+        flen = len(cseries) // 2 + 1
         ftype = complex_same_precision_as(timeseries)
 
-        cfreq = zeros(flen, dtype=ftype)
-        tfreq = zeros(flen, dtype=ftype)
+        if not USE_CACHING_FOR_LFILTER:
+            cfreq = zeros(flen, dtype=ftype)
+            tfreq = zeros(flen, dtype=ftype)
+            fft(Array(cseries), cfreq)
+            fft(Array(timeseries), tfreq)
+            cout = zeros(flen, ftype)
+            correlate(cfreq, tfreq, cout)
+            out = zeros(len(timeseries), dtype=timeseries)
+            ifft(cout, out)
 
-        fft(Array(cseries), cfreq)
-        fft(Array(timeseries), tfreq)
+        else:
+            npoints = len(cseries)
+            # NOTE: This function is cached!
+            ifftouts = create_memory_and_engine_for_class_based_fft(
+                npoints,
+                timeseries.dtype,
+                ifft=True,
+                uid=LFILTER_UNIQUE_ID_1
+            )
 
-        cout = zeros(flen, ftype)
-        out = zeros(len(timeseries), dtype=timeseries)
+            # FFT contents of cseries into cfreq
+            cfreq = execute_cached_fft(cseries, uid=LFILTER_UNIQUE_ID_2,
+                                       copy_output=False,
+                                       normalize_by_rate=False)
 
-        correlate(cfreq, tfreq, cout)
-        ifft(cout, out)
+            # FFT contents of timeseries into tfreq
+            tfreq = execute_cached_fft(timeseries, uid=LFILTER_UNIQUE_ID_3,
+                                       copy_output=False,
+                                       normalize_by_rate=False)
 
-        return out.numpy()  / len(out)
+            cout, out, fft_class = ifftouts
+
+            # Correlate cfreq and tfreq
+            correlate(cfreq, tfreq, cout)
+            # IFFT correlation output into out
+            fft_class.execute()
+
+        return TimeSeries(out.numpy()  / len(out), epoch=timeseries.start_time,
+                          delta_t=timeseries.delta_t)
+    else:
+        # recursively perform which saves a bit on memory usage
+        # but must keep within recursion limit
+        chunksize = max(fillen * 5, len(timeseries) // 128)
+        part1 = lfilter(coefficients, timeseries[0:chunksize])
+        part2 = lfilter(coefficients, timeseries[chunksize - fillen:])
+        out = timeseries.copy()
+        out[:len(part1)] = part1
+        out[len(part1):] = part2[fillen:]
+        return out
 
 def fir_zero_filter(coeff, timeseries):
     """Filter the timeseries with a set of FIR coefficients
@@ -94,15 +153,15 @@ def fir_zero_filter(coeff, timeseries):
     for the FIR filter delay and the corrupted regions zeroed out.
     """
     # apply the filter
-    series = lfilter(coeff, timeseries.numpy())
+    series = lfilter(coeff, timeseries)
 
     # reverse the time shift caused by the filter,
     # corruption regions contain zeros
     # If the number of filter coefficients is odd, the central point *should*
     # be included in the output so we only zero out a region of len(coeff) - 1
-    data = numpy.zeros(len(timeseries))
-    data[len(coeff)//2:len(data)-len(coeff)//2] = series[(len(coeff) // 2) * 2:]
-    return data
+    series[:(len(coeff) // 2) * 2] = 0
+    series.roll(-len(coeff)//2)
+    return series
 
 def resample_to_delta_t(timeseries, delta_t, method='butterworth'):
     """Resmple the time_series to delta_t
@@ -139,10 +198,10 @@ def resample_to_delta_t(timeseries, delta_t, method='butterworth'):
     if not isinstance(timeseries,TimeSeries):
         raise TypeError("Can only resample time series")
 
-    if timeseries.kind is not 'real':
+    if timeseries.kind != 'real':
         raise TypeError("Time series must be real")
 
-    if timeseries.delta_t == delta_t:
+    if timeseries.sample_rate_close(1.0 / delta_t):
         return timeseries * 1
 
     if method == 'butterworth':
@@ -151,13 +210,13 @@ def resample_to_delta_t(timeseries, delta_t, method='butterworth'):
         data = lal_data.data.data
 
     elif method == 'ldas':
-        factor = int(delta_t / timeseries.delta_t)
+        factor = int(round(delta_t / timeseries.delta_t))
         numtaps = factor * 20 + 1
 
         # The kaiser window has been testing using the LDAS implementation
         # and is in the same configuration as used in the original lalinspiral
-        filter_coefficients = scipy.signal.firwin(numtaps, 1.0 / factor,
-                                                  window=('kaiser', 5))
+        filter_coefficients = cached_firwin(numtaps, 1.0 / factor,
+                                            window=('kaiser', 5))
 
         # apply the filter and decimate
         data = fir_zero_filter(filter_coefficients, timeseries)[::factor]
@@ -177,6 +236,9 @@ def resample_to_delta_t(timeseries, delta_t, method='butterworth'):
 
 _highpass_func = {numpy.dtype('float32'): lal.HighPassREAL4TimeSeries,
                  numpy.dtype('float64'): lal.HighPassREAL8TimeSeries}
+_lowpass_func = {numpy.dtype('float32'): lal.LowPassREAL4TimeSeries,
+                 numpy.dtype('float64'): lal.LowPassREAL8TimeSeries}
+
 
 def notch_fir(timeseries, f1, f2, order, beta=5.0):
     """ notch filter the time series using an FIR filtered generated from
@@ -205,9 +267,8 @@ def notch_fir(timeseries, f1, f2, order, beta=5.0):
     """
     k1 = f1 / float((int(1.0 / timeseries.delta_t) / 2))
     k2 = f2 / float((int(1.0 / timeseries.delta_t) / 2))
-    coeff = scipy.signal.firwin(order * 2 + 1, [k1, k2], window=('kaiser', beta))
-    data = fir_zero_filter(coeff, timeseries)
-    return TimeSeries(data, epoch=timeseries.start_time, delta_t=timeseries.delta_t)
+    coeff = cached_firwin(order * 2 + 1, [k1, k2], window=('kaiser', beta))
+    return fir_zero_filter(coeff, timeseries)
 
 def lowpass_fir(timeseries, frequency, order, beta=5.0):
     """ Lowpass filter the time series using an FIR filtered generated from
@@ -225,9 +286,8 @@ def lowpass_fir(timeseries, frequency, order, beta=5.0):
         Beta parameter of the kaiser window that sets the side lobe attenuation.
     """
     k = frequency / float((int(1.0 / timeseries.delta_t) / 2))
-    coeff = scipy.signal.firwin(order * 2 + 1, k, window=('kaiser', beta))
-    data = fir_zero_filter(coeff, timeseries)
-    return TimeSeries(data, epoch=timeseries.start_time, delta_t=timeseries.delta_t)
+    coeff = cached_firwin(order * 2 + 1, k, window=('kaiser', beta))
+    return fir_zero_filter(coeff, timeseries)
 
 def highpass_fir(timeseries, frequency, order, beta=5.0):
     """ Highpass filter the time series using an FIR filtered generated from
@@ -245,9 +305,8 @@ def highpass_fir(timeseries, frequency, order, beta=5.0):
         Beta parameter of the kaiser window that sets the side lobe attenuation.
     """
     k = frequency / float((int(1.0 / timeseries.delta_t) / 2))
-    coeff = scipy.signal.firwin(order * 2 + 1, k, window=('kaiser', beta), pass_zero=False)
-    data = fir_zero_filter(coeff, timeseries)
-    return TimeSeries(data, epoch=timeseries.start_time, delta_t=timeseries.delta_t)
+    coeff = cached_firwin(order * 2 + 1, k, window=('kaiser', beta), pass_zero=False)
+    return fir_zero_filter(coeff, timeseries)
 
 def highpass(timeseries, frequency, filter_order=8, attenuation=0.1):
     """Return a new timeseries that is highpassed.
@@ -282,7 +341,7 @@ def highpass(timeseries, frequency, filter_order=8, attenuation=0.1):
     if not isinstance(timeseries, TimeSeries):
         raise TypeError("Can only resample time series")
 
-    if timeseries.kind is not 'real':
+    if timeseries.kind != 'real':
         raise TypeError("Time series must be real")
 
     lal_data = timeseries.lal()
@@ -291,6 +350,49 @@ def highpass(timeseries, frequency, filter_order=8, attenuation=0.1):
 
     return TimeSeries(lal_data.data.data, delta_t = lal_data.deltaT,
                       dtype=timeseries.dtype, epoch=timeseries._epoch)
+
+def lowpass(timeseries, frequency, filter_order=8, attenuation=0.1):
+    """Return a new timeseries that is lowpassed.
+
+    Return a new time series that is lowpassed below the `frequency`.
+
+    Parameters
+    ----------
+    Time Series: TimeSeries
+        The time series to be low-passed.
+    frequency: float
+        The frequency above which is suppressed.
+    filter_order: {8, int}, optional
+        The order of the filter to use when low-passing the time series.
+    attenuation: {0.1, float}, optional
+        The attenuation of the filter.
+
+    Returns
+    -------
+    Time Series: TimeSeries
+        A  new TimeSeries that has been low-passed.
+
+    Raises
+    ------
+    TypeError:
+        time_series is not an instance of TimeSeries.
+    TypeError:
+        time_series is not real valued
+    """
+
+    if not isinstance(timeseries, TimeSeries):
+        raise TypeError("Can only resample time series")
+
+    if timeseries.kind != 'real':
+        raise TypeError("Time series must be real")
+
+    lal_data = timeseries.lal()
+    _lowpass_func[timeseries.dtype](lal_data, frequency,
+                                    1-attenuation, filter_order)
+
+    return TimeSeries(lal_data.data.data, delta_t = lal_data.deltaT,
+                      dtype=timeseries.dtype, epoch=timeseries._epoch)
+
 
 def interpolate_complex_frequency(series, delta_f, zeros_offset=0, side='right'):
     """Interpolate complex frequency series to desired delta_f.
@@ -336,5 +438,7 @@ def interpolate_complex_frequency(series, delta_f, zeros_offset=0, side='right')
 
     return out_series
 
-__all__ = ['resample_to_delta_t', 'highpass', 'interpolate_complex_frequency', 'highpass_fir', 'lowpass_fir', 'notch_fir', 'fir_zero_filter']
+__all__ = ['resample_to_delta_t', 'highpass', 'lowpass',
+           'interpolate_complex_frequency', 'highpass_fir',
+           'lowpass_fir', 'notch_fir', 'fir_zero_filter']
 

@@ -94,7 +94,7 @@ def gelman_rubin(chains, auto_burn_in=True):
     # this will have shape (nchains, nparameters, niterations)
     if auto_burn_in:
         _, _, niterations = numpy.array(chains).shape
-        chains = numpy.array([chain[:, niterations / 2 + 1:]
+        chains = numpy.array([chain[:, niterations // 2 + 1:]
                               for chain in chains])
 
     # get number of chains, parameters, and iterations

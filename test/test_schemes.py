@@ -48,12 +48,13 @@ if isinstance(_context,CUDAScheme):
     import pycuda.gpuarray
     from pycuda.gpuarray import GPUArray as SchemeArray
 elif isinstance(_context,CPUScheme):
-    from pycbc.types.aligned import ArrayWithAligned as SchemeArray
+    from numpy import ndarray as SchemeArray
 
-from pycbc.types.aligned import ArrayWithAligned as CPUArray
+from numpy import ndarray as CPUArray
 
 
 class SchemeTestBase(unittest.TestCase):
+    __test__ = False
     def setUp(self):
         self.context = _context
         self.scheme = _scheme
@@ -158,6 +159,7 @@ class SchemeTestBase(unittest.TestCase):
 
 def scheme_test_maker(dtype,odtype):
     class tests(SchemeTestBase):
+        __test__ = True
         def __init__(self,*args):
             self.dtype = dtype
             self.odtype = odtype
@@ -181,5 +183,4 @@ for ty,oktype in types:
 if __name__ == '__main__':
     results = unittest.TextTestRunner(verbosity=2).run(suite)
     simple_exit(results)
-
 

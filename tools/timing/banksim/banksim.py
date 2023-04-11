@@ -22,31 +22,27 @@
 #
 # =============================================================================
 #
-from time import sleep
 
 import sys
-from numpy import loadtxt,complex64,float32
+from numpy import complex64,float32
 from optparse import OptionParser
-from glue.ligolw import utils as ligolw_utils
-from glue.ligolw import table, lsctables
-from math import pow
-
-from scipy.interpolate import interp1d
+from ligo.lw import utils as ligolw_utils
+from ligo.lw import table, lsctables
 
 from pycbc.utils import mass1_mass2_to_mchirp_eta
 from pycbc.waveform import get_td_waveform, get_fd_waveform, td_approximants, fd_approximants
 from pycbc import DYN_RANGE_FAC
 from pycbc.types import FrequencySeries, TimeSeries, zeros, real_same_precision_as, complex_same_precision_as
-from pycbc.filter import match, sigmasq, resample_to_delta_t
-from pycbc.scheme import DefaultScheme, CUDAScheme, OpenCLScheme
+from pycbc.filter import match, sigmasq
+from pycbc.scheme import DefaultScheme, CUDAScheme
 from pycbc.fft import fft
 from math import cos, sin
 import pycbc.psd
 
 def update_progress(progress):
-    print '\r\r[{0}] {1:.2%}'.format('#'*(int(progress*100)/2)+' '*(50-int(progress*100)/2), progress),
+    print('\r\r[{0}] {1:.2%}'.format('#'*(int(progress*100)/2)+' '*(50-int(progress*100)/2), progress), end=' ')
     if progress == 100:
-        print "Done"
+        print("Done")
     sys.stdout.flush()
 
 ## Remove the need for these functions ########################################
@@ -186,28 +182,28 @@ if options.use_cuda:
 else:
     ctx = DefaultScheme()
 
-print "STARTING THE BANKSIM"
+print("STARTING THE BANKSIM")
 
 # Load in the template bank file
 indoc = ligolw_utils.load_filename(options.bank_file, False)
 try :
-    template_table = table.get_table(indoc, lsctables.SnglInspiralTable.tableName)
+    template_table = lsctables.SnglInspiralTable.get_table(indoc)
 except ValueError:
-    template_table = table.get_table(indoc, lsctables.SimInspiralTable.tableName)
+    template_table = lsctables.SimInspiralTable.get_table(indoc)
 
 # open the output file where the max overlaps over the bank are stored
 fout = open(options.out_file, "w")
 fout2 = open(options.out_file+".found", "w")
 
-print "Writing matches to " + options.out_file
-print "Writing recovered template in " + options.out_file+".found"
+print("Writing matches to " + options.out_file)
+print("Writing recovered template in " + options.out_file+".found")
 
 # Load in the simulation list
 indoc = ligolw_utils.load_filename(options.sim_file, False)
 try:
-    signal_table = table.get_table(indoc, lsctables.SimInspiralTable.tableName)
+    signal_table = lsctables.SimInspiralTable.get_table(indoc)
 except ValueError:
-    signal_table = table.get_table(indoc, lsctables.SnglInspiralTable.tableName)
+    signal_table = lsctables.SnglInspiralTable.get_table(indoc)
 
 def outside_mchirp_window(template,signal,w):
     template_mchirp,et = mass1_mass2_to_mchirp_eta(template.mass1,template.mass2)

@@ -20,8 +20,11 @@ This modules contains functions for reading in data from frame files or caches
 import lalframe, logging
 import lal
 import numpy
+import math
 import os.path, glob, time
-import glue.datafind
+import gwdatafind
+import pycbc
+from urllib.parse import urlparse
 from pycbc.types import TimeSeries, zeros
 
 
@@ -99,8 +102,8 @@ def locations_to_cache(locations, latest=False):
     Parameters
     ----------
     locations : list
-        A list of strings containing files, globs, or cache files used to build
-    a combined lal cache file object.
+        A list of strings containing files, globs, or cache files used to
+        build a combined lal cache file object.
     latest : Optional, {False, Boolean}
         Only return a cache with the most recent frame in the locations.
         If false, all results are returned.
@@ -109,7 +112,7 @@ def locations_to_cache(locations, latest=False):
     -------
     cache : lal.Cache
         A cumulative lal cache object containing the files derived from the
-    list of locations
+        list of locations.
     """
     cum_cache = lal.Cache()
     for source in locations:
@@ -123,6 +126,8 @@ def locations_to_cache(locations, latest=False):
                     return os.path.getctime(fn)
                 except OSError:
                     return 0
+            if not flist:
+                raise ValueError('no frame or cache files found in ' + source)
             flist = [max(flist, key=relaxed_getctime)]
 
         for file_path in flist:
@@ -140,7 +145,7 @@ def locations_to_cache(locations, latest=False):
     return cum_cache
 
 def read_frame(location, channels, start_time=None,
-               end_time=None, duration=None, check_integrity=True,
+               end_time=None, duration=None, check_integrity=False,
                sieve=None):
     """Read time series from frame data.
 
@@ -190,6 +195,12 @@ def read_frame(location, channels, start_time=None,
     if sieve:
         logging.info("Using frames that match regexp: %s", sieve)
         lal.CacheSieve(cum_cache, 0, 0, None, None, sieve)
+    if start_time is not None and end_time is not None:
+        # Before sieving, check if this is sane. Otherwise it will fail later.
+        if (int(math.ceil(end_time)) - int(start_time)) <= 0:
+            raise ValueError("Negative or null duration")
+        lal.CacheSieve(cum_cache, int(start_time), int(math.ceil(end_time)),
+                       None, None, None)
 
     stream = lalframe.FrStreamCacheOpen(cum_cache)
     stream.mode = lalframe.FR_STREAM_VERBOSE_MODE
@@ -197,7 +208,7 @@ def read_frame(location, channels, start_time=None,
     if check_integrity:
         stream.mode = (stream.mode | lalframe.FR_STREAM_CHECKSUM_MODE)
 
-    lalframe.FrSetMode(stream.mode, stream)
+    lalframe.FrStreamSetMode(stream, stream.mode)
 
     # determine duration of data
     if type(channels) is list:
@@ -212,7 +223,7 @@ def read_frame(location, channels, start_time=None,
     series = create_series_func(first_channel, stream.epoch, 0, 0,
                                 lal.ADCCountUnit, 0)
     get_series_metadata_func(series, stream)
-    data_duration = data_length * series.deltaT
+    data_duration = (data_length + 0.5) * series.deltaT
 
     if start_time is None:
         start_time = stream.epoch*1
@@ -259,38 +270,7 @@ def datafind_connection(server=None):
     connection
         The open connection to the datafind server.
     """
-
-    if server:
-        datafind_server = server
-    else:
-        # Get the server name from the environment
-        if 'LIGO_DATAFIND_SERVER' in os.environ:
-            datafind_server = os.environ["LIGO_DATAFIND_SERVER"]
-        else:
-            err = "Trying to obtain the ligo datafind server url from "
-            err += "the environment, ${LIGO_DATAFIND_SERVER}, but that "
-            err += "variable is not populated."
-            raise ValueError(err)
-
-    # verify authentication options
-    if not datafind_server.endswith("80"):
-        cert_file, key_file = glue.datafind.find_credential()
-    else:
-        cert_file, key_file = None, None
-
-    # Is a port specified in the server URL
-    dfs_fields = datafind_server.split(':', 1)
-    server = dfs_fields[0]
-    port = int(dfs_fields[1]) if len(dfs_fields) == 2 else None
-
-    # Open connection to the datafind server
-    if cert_file and key_file:
-        connection = glue.datafind.GWDataFindHTTPSConnection(
-                host=server, port=port, cert_file=cert_file, key_file=key_file)
-    else:
-        connection = glue.datafind.GWDataFindHTTPConnection(
-                host=server, port=port)
-    return connection
+    return gwdatafind.connect(host=server)
 
 def frame_paths(frame_type, start_time, end_time, server=None, url_type='file'):
     """Return the paths to a span of frame files
@@ -324,8 +304,7 @@ def frame_paths(frame_type, start_time, end_time, server=None, url_type='file'):
     connection.find_times(site, frame_type,
                           gpsstart=start_time, gpsend=end_time)
     cache = connection.find_frame_urls(site, frame_type, start_time, end_time,urltype=url_type)
-    paths = [entry.path for entry in cache]
-    return paths
+    return [urlparse(entry).path for entry in cache]
 
 def query_and_read_frame(frame_type, channels, start_time, end_time,
                          sieve=None, check_integrity=False):
@@ -365,6 +344,13 @@ def query_and_read_frame(frame_type, channels, start_time, end_time,
     """
     # Allows compatibility with our standard tools
     # We may want to place this into a higher level frame getting tool
+    if frame_type == 'LOSC_STRAIN':
+        from pycbc.frame.losc import read_strain_losc
+        if not isinstance(channels, list):
+            channels = [channels]
+        data = [read_strain_losc(c[:2], start_time, end_time)
+                for c in channels]
+        return data if len(data) > 1 else data[0]
     if frame_type == 'LOSC':
         from pycbc.frame.losc import read_frame_losc
         return read_frame_losc(channels, start_time, end_time)
@@ -605,7 +591,7 @@ class DataBuffer(object):
             self.dur = int(fname[3])
 
         fstart = int(self.ref + numpy.floor((start - self.ref) / float(self.dur)) * self.dur)
-        starts = numpy.arange(fstart, end, self.dur).astype(numpy.int)
+        starts = numpy.arange(fstart, end, self.dur).astype(int)
 
         keys = []
         for s in starts:
@@ -614,10 +600,9 @@ class DataBuffer(object):
                 n = int(pattern[int(pattern.index('GPS') + 3)])
                 pattern = pattern.replace('GPS%s' % n, str(s)[0:n])
 
-            name = '%s/%s-%s-%s.gwf' % (pattern, self.beg, s, self.dur)
+            name = f'{pattern}/{self.beg}-{s}-{self.dur}.gwf'
             # check that file actually exists, else abort now
             if not os.path.exists(name):
-                logging.info("%s does not seem to exist yet" % name)
                 raise RuntimeError
 
             keys.append(name)
@@ -645,27 +630,24 @@ class DataBuffer(object):
         """
         if self.force_update_cache:
             self.update_cache()
-
-        try:
-            if self.increment_update_cache:
-                self.update_cache_by_increment(blocksize)
-
-            return DataBuffer.advance(self, blocksize)
-
-        except RuntimeError:
-            if lal.GPSTimeNow() > timeout + self.raw_buffer.end_time:
-                # The frame is not there and it should be by now, so we give up
-                # and treat it as zeros
-                DataBuffer.null_advance(self, blocksize)
-                return None
-            else:
-                # I am too early to give up on this frame, so we should try again
-                time.sleep(1)
-                return self.attempt_advance(blocksize, timeout=timeout)
+        while True:
+            try:
+                if self.increment_update_cache:
+                    self.update_cache_by_increment(blocksize)
+                return DataBuffer.advance(self, blocksize)
+            except RuntimeError:
+                if pycbc.gps_now() > timeout + self.raw_buffer.end_time:
+                    # The frame is not there and it should be by now,
+                    # so we give up and treat it as zeros
+                    DataBuffer.null_advance(self, blocksize)
+                    return None
+                # I am too early to give up on this frame,
+                # so we should try again
+                time.sleep(0.1)
 
 class StatusBuffer(DataBuffer):
 
-    """ Read state vector information from a frame file """
+    """ Read state vector or DQ information from a frame file """
 
     def __init__(self, frame_src,
                        channel_name,
@@ -673,14 +655,15 @@ class StatusBuffer(DataBuffer):
                        max_buffer=2048,
                        valid_mask=3,
                        force_update_cache=False,
-                       increment_update_cache=None):
+                       increment_update_cache=None,
+                       valid_on_zero=False):
         """ Create a rolling buffer of status data from a frame
 
         Parameters
         ---------
         frame_src: str of list of strings
             Strings that indicate where to read from files from. This can be a
-        list of frame files, a glob, etc.
+            list of frame files, a glob, etc.
         channel_name: str
             Name of the channel to read from the frame files
         start_time:
@@ -689,13 +672,18 @@ class StatusBuffer(DataBuffer):
             Length of the buffer in seconds
         valid_mask: {int, HOFT_OK | SCIENCE_INTENT}, Optional
             Set of flags that must be on to indicate valid frame data.
+        valid_on_zero: bool
+            If True, `valid_mask` is ignored and the status is considered
+            "good" simply when the channel is zero.
         """
         DataBuffer.__init__(self, frame_src, channel_name, start_time,
                             max_buffer=max_buffer,
                             force_update_cache=force_update_cache,
                             increment_update_cache=increment_update_cache,
                             dtype=numpy.int32)
+
         self.valid_mask = valid_mask
+        self.valid_on_zero = valid_on_zero
 
     def check_valid(self, values, flag=None):
         """Check if the data contains any non-valid status information
@@ -713,13 +701,13 @@ class StatusBuffer(DataBuffer):
             Returns True if all of the status information if valid,
              False if any is not.
         """
-        if flag is None:
-            flag = self.valid_mask
-
-        if numpy.any(numpy.bitwise_and(values.numpy(), flag) != flag):
-            return False
+        if self.valid_on_zero:
+            valid = values.numpy() == 0
         else:
-            return True
+            if flag is None:
+                flag = self.valid_mask
+            valid = numpy.bitwise_and(values.numpy(), flag) == flag
+        return bool(numpy.all(valid))
 
     def is_extent_valid(self, start_time, duration, flag=None):
         """Check if the duration contains any non-valid frames
@@ -770,7 +758,12 @@ class StatusBuffer(DataBuffer):
         e = s + int((duration + padding) * sr) + 1
         data = self.raw_buffer[s:e]
         stamps = data.sample_times.numpy()
-        invalid = numpy.bitwise_and(data.numpy(), self.valid_mask) != self.valid_mask
+
+        if self.valid_on_zero:
+            invalid = data.numpy() != 0
+        else:
+            invalid = numpy.bitwise_and(data.numpy(), self.valid_mask) \
+                    != self.valid_mask
 
         starts = stamps[invalid] - padding
         ends = starts + 1.0 / sr + padding * 2.0
@@ -800,3 +793,116 @@ class StatusBuffer(DataBuffer):
         except RuntimeError:
             self.null_advance(blocksize)
             return False
+
+class iDQBuffer(object):
+
+    """ Read iDQ timeseries from a frame file """
+
+    def __init__(self, frame_src,
+                 idq_channel_name,
+                 idq_status_channel_name,
+                 idq_threshold,
+                 start_time,
+                 max_buffer=512,
+                 force_update_cache=False,
+                 increment_update_cache=None):
+        """
+        Parameters
+        ----------
+        frame_src: str of list of strings
+            Strings that indicate where to read from files from. This can be a
+            list of frame files, a glob, etc.
+        idq_channel_name: str
+            Name of the channel to read the iDQ statistic from
+        idq_status_channel_name: str
+            Name of the channel to read the iDQ status from
+        idq_threshold: float
+            Threshold which triggers a veto if iDQ channel falls below this threshold
+        start_time:
+            Time to start reading from.
+        max_buffer: {int, 512}, Optional
+            Length of the buffer in seconds
+        force_update_cache: {boolean, True}, Optional
+            Re-check the filesystem for frame files on every attempt to
+            read more data.
+        increment_update_cache: {str, None}, Optional
+            Pattern to look for frame files in a GPS dependent directory. This
+            is an alternate to the forced updated of the frame cache, and
+            apptempts to predict the next frame file name without probing the
+            filesystem.
+        """
+        self.threshold = idq_threshold
+        self.idq = DataBuffer(frame_src, idq_channel_name, start_time,
+                                max_buffer=max_buffer,
+                                force_update_cache=force_update_cache,
+                                increment_update_cache=increment_update_cache)
+        self.idq_state = DataBuffer(frame_src, idq_status_channel_name, start_time,
+                                        max_buffer=max_buffer,
+                                        force_update_cache=force_update_cache,
+                                        increment_update_cache=increment_update_cache)
+
+    def indices_of_flag(self, start_time, duration, times, padding=0):
+        """ Return the indices of the times lying in the flagged region
+
+        Parameters
+        ----------
+        start_time: int
+            Beginning time to request for
+        duration: int
+            Number of seconds to check.
+        padding: float
+            Number of seconds to add around flag inactive times to be considered
+        inactive as well.
+
+        Returns
+        -------
+        indices: numpy.ndarray
+            Array of indices marking the location of triggers within valid
+        time.
+        """
+        from pycbc.events.veto import indices_outside_times
+        sr = self.idq.raw_buffer.sample_rate
+        s = int((start_time - self.idq.raw_buffer.start_time - padding) * sr) - 1
+        e = s + int((duration + padding) * sr) + 1
+        idq_fap = self.idq.raw_buffer[s:e]
+        stamps = idq_fap.sample_times.numpy()
+        low_fap = idq_fap.numpy() <= self.threshold
+        idq_valid = self.idq_state.raw_buffer[s:e]
+        idq_valid = idq_valid.numpy().astype(bool)
+        valid_low_fap = numpy.logical_and(idq_valid, low_fap)
+        glitch_idx = numpy.flatnonzero(valid_low_fap)
+        glitch_times = stamps[glitch_idx]
+        starts = glitch_times - padding
+        ends = starts + 1.0 / sr + padding * 2.0
+        idx = indices_outside_times(times, starts, ends)
+        return idx
+
+    def advance(self, blocksize):
+        """ Add blocksize seconds more to the buffer, push blocksize seconds
+        from the beginning.
+
+        Parameters
+        ----------
+        blocksize: int
+            The number of seconds to attempt to read
+
+        Returns
+        -------
+        status: boolean
+            Returns True if advance is succesful,
+            False if not.
+        """
+        idq_ts = self.idq.attempt_advance(blocksize)
+        idq_state_ts = self.idq_state.attempt_advance(blocksize)
+        return (idq_ts is not None) and (idq_state_ts is not None)
+
+    def null_advance(self, blocksize):
+        """Advance and insert zeros
+
+        Parameters
+        ----------
+        blocksize: int
+            The number of seconds to advance the buffers
+        """
+        self.idq.null_advance(blocksize)
+        self.idq_state.null_advance(blocksize)

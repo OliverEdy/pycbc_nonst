@@ -44,17 +44,14 @@ __program__ = "dayhopecheck"
 
 
 import os
-import copy
 import logging
 import argparse
 from ligo import segments
 import pycbc.workflow as _workflow
 
-from glue.ligolw import ligolw
-from glue.ligolw import lsctables
-from glue.ligolw import utils as ligolw_utils
-from glue.ligolw.utils import segments as ligolw_segments
-from glue.ligolw.utils import process as ligolw_process
+from ligo.lw import ligolw
+from ligo.lw import utils as ligolw_utils
+from ligo.lw.utils import process as ligolw_process
 
 from glue.segmentdb import segmentdb_utils
 
@@ -75,7 +72,7 @@ currDir = os.path.abspath(args.output_dir)
 segDir = os.path.join(currDir,"segments")
 dfDir = os.path.join(currDir,"datafind")
 
-print "BEGIN BY GENERATING SCIENCE AND CAT_X VETOES"
+print("BEGIN BY GENERATING SCIENCE AND CAT_X VETOES")
 
 def segment_report(sSegs):
     fullLen = 0
@@ -94,17 +91,17 @@ def segment_report(sSegs):
             if abs(seg) > 2000:
                 longLen+=abs(seg)
                 longNum+=1
-        print "For ifo %s there is %d seconds of data in %d segments, %d seconds (%d unique segments) in segments longer than 500s and %d seconds (%d unique segments) longer than 2000s." %(ifo, fullLen, fullNum, shortLen, shortNum, longLen, longNum)
+        print("For ifo %s there is %d seconds of data in %d segments, %d seconds (%d unique segments) in segments longer than 500s and %d seconds (%d unique segments) longer than 2000s." %(ifo, fullLen, fullNum, shortLen, shortNum, longLen, longNum))
 
 
 scienceSegs, segsList = _workflow.setup_segment_generation(workflow, segDir)
 
 segment_report(scienceSegs)
 
-print
-print
+print()
+print()
 
-print "RUNNING DATAFIND"
+print("RUNNING DATAFIND")
 datafinds, scienceSegs = _workflow.setup_datafind_workflow(workflow, scienceSegs,
                      dfDir, segsList)
 

@@ -16,23 +16,44 @@
 This modules provides classes for evaluating multi-dimensional constraints.
 """
 
+import re
+import scipy.spatial
+import numpy
+import h5py
 from pycbc import transforms
 from pycbc.io import record
 
+
 class Constraint(object):
-    """ Creates a constraint that evaluates to True if parameters obey
+    """Creates a constraint that evaluates to True if parameters obey
     the constraint and False if they do not.
     """
     name = "custom"
-    required_parameters = []
-    def __init__(self, constraint_arg, transforms=None, **kwargs):
+
+    def __init__(self, constraint_arg, static_args=None, transforms=None,
+                 **kwargs):
+        static_args = (
+            {} if static_args is None
+            else dict(sorted(
+                static_args.items(), key=lambda x: len(x[0]), reverse=True))
+            )
+        for arg, val in static_args.items():
+            swp = f"'{val}'" if isinstance(val, str) else str(val)
+            # Substitute static arg name for value if it appears in the
+            # constraint_arg string at the beginning of a word and is not
+            # followed by an underscore or equals sign.
+            # This ensures that static_args that are also kwargs in function calls are
+            # handled correctly, i.e., the kwarg is not touched while its value is replaced
+            # with the static_arg value.
+            constraint_arg = re.sub(
+                r'\b{}(?!\_|\=)'.format(arg), swp, constraint_arg)
         self.constraint_arg = constraint_arg
         self.transforms = transforms
         for kwarg in kwargs.keys():
             setattr(self, kwarg, kwargs[kwarg])
 
     def __call__(self, params):
-        """ Evaluates constraint.
+        """Evaluates constraint.
         """
         # cast to FieldArray
         if isinstance(params, dict):
@@ -59,74 +80,47 @@ class Constraint(object):
         """
         return params[self.constraint_arg]
 
-class MtotalLT(Constraint):
-    """ Pre-defined constraint that check if total mass is less than a value.
+
+class SupernovaeConvexHull(Constraint):
+    """Pre defined constraint for core-collapse waveforms that checks
+    whether a given set of coefficients lie within the convex hull of
+    the coefficients of the principal component basis vectors.
     """
-    name = "mtotal_lt"
-    required_parameters = ["mass1", "mass2"]
+    name = "supernovae_convex_hull"
+    required_parameters = ["coeff_0", "coeff_1"]
+
+    def __init__(self, constraint_arg, transforms=None, **kwargs):
+        super(SupernovaeConvexHull,
+              self).__init__(constraint_arg, transforms=transforms, **kwargs)
+
+        if 'principal_components_file' in kwargs:
+            pc_filename = kwargs['principal_components_file']
+            hull_dimention = numpy.array(kwargs['hull_dimention'])
+            self.hull_dimention = int(hull_dimention)
+            pc_file = h5py.File(pc_filename, 'r')
+            pc_coefficients = numpy.array(pc_file.get('coefficients'))
+            pc_file.close()
+            hull_points = []
+            for dim in range(self.hull_dimention):
+                hull_points.append(pc_coefficients[:, dim])
+            hull_points = numpy.array(hull_points).T
+            pc_coeffs_hull = scipy.spatial.Delaunay(hull_points)
+            self._hull = pc_coeffs_hull
 
     def _constraint(self, params):
-        """ Evaluates constraint function.
-        """
-        return params["mass1"] + params["mass2"] < self.mtotal
 
-class CartesianSpinSpace(Constraint):
-    """ Pre-defined constraint that check if Cartesian parameters
-    are within acceptable values.
-    """
-    name = "cartesian_spin_space"
-    required_parameters = ["mass1", "mass2", "spin1x", "spin1y", "spin1z",
-                           "spin2x", "spin2y", "spin2z"]
+        output_array = []
+        points = numpy.array([params["coeff_0"],
+                              params["coeff_1"],
+                              params["coeff_2"]])
+        for coeff_index in range(len(params["coeff_0"])):
+            point = points[:, coeff_index][:self.hull_dimention]
+            output_array.append(self._hull.find_simplex(point) >= 0)
+        return numpy.array(output_array)
 
-    def _constraint(self, params):
-        """ Evaluates constraint function.
-        """
-        if (params["spin1x"]**2 + params["spin1y"]**2 +
-                params["spin1z"]**2)**2 > 1:
-            return False
-        elif (params["spin2x"]**2 + params["spin2y"]**2 +
-                  params["spin2z"]**2)**2 > 1:
-            return False
-        else:
-            return True
-
-class EffectiveSpinSpace(Constraint):
-    """ Pre-defined constraint that check if effective spin parameters
-    are within acceptable values.
-    """
-    name = "effective_spin_space"
-    required_parameters = ["mass1", "mass2", "q", "xi1", "xi2",
-                           "chi_eff", "chi_a"]
-
-    def _constraint(self, params):
-        """ Evaluates constraint function.
-        """
-
-        # ensure that mass1 > mass2
-        if params["mass1"] < params["mass2"]:
-            return False
-
-        # constraint for secondary mass
-        a = ((4.0 * params["q"]**2 + 3.0 * params["q"])
-                 / (4.0 + 3.0 * params["q"]) * params["xi2"])**2
-        b = ((1.0 + params["q"]**2) / 4.0
-                 * (params["chi_eff"] + params["chi_a"])**2)
-        if a + b > 1:
-            return False
-
-        # constraint for primary mass
-        a = params["xi1"]**2
-        b = ((1.0 + params["q"])**2 / (4.0 * params["q"]**2)
-                 * (params["chi_eff"] - params["chi_a"])**2)
-        if a + b > 1:
-            return False
-
-        return True
 
 # list of all constraints
 constraints = {
     Constraint.name : Constraint,
-    MtotalLT.name : MtotalLT,
-    CartesianSpinSpace.name : CartesianSpinSpace,
-    EffectiveSpinSpace.name : EffectiveSpinSpace,
+    SupernovaeConvexHull.name : SupernovaeConvexHull,
 }

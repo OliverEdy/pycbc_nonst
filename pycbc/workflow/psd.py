@@ -17,13 +17,12 @@
 """This module is responsible for setting up PSD-related jobs in workflows.
 """
 
-from pycbc.workflow.core import FileList, make_analysis_dir, Executable, File
+from pycbc.workflow.core import FileList, make_analysis_dir, Executable
 from pycbc.workflow.core import SegFile
 from ligo.segments import segmentlist
 
 class CalcPSDExecutable(Executable):
     current_retention_level = Executable.ALL_TRIGGERS
-    file_input_options = ['--gating-file']
 
 class MergePSDFiles(Executable):
     current_retention_level = Executable.MERGED_TRIGGERS
@@ -32,7 +31,7 @@ def chunks(l, n):
     """ Yield n successive chunks from l.
     """
     newn = int(len(l) / n)
-    for i in xrange(0, n-1):
+    for i in range(0, n-1):
         yield l[i*newn:i*newn+newn]
     yield l[n*newn-newn:]
 

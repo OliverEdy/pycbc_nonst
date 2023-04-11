@@ -17,18 +17,52 @@
 This modules provides a list of implemented samplers for parameter estimation.
 """
 
-from __future__ import absolute_import
+import logging
+
 # pylint: disable=unused-import
-from .base import (initial_dist_from_config, create_new_output_file)  
-from .emcee import EmceeEnsembleSampler
-from .emcee_pt import EmceePTSampler
+from .base import (initial_dist_from_config, create_new_output_file)
+from .multinest import MultinestSampler
+from .ultranest import UltranestSampler
+from .dummy import DummySampler
 
 # list of available samplers
 samplers = {cls.name: cls for cls in (
-    EmceeEnsembleSampler,
-    EmceePTSampler,
+    MultinestSampler,
+    UltranestSampler,
+    DummySampler,
 )}
 
+try:
+    from .emcee import EmceeEnsembleSampler
+    from .emcee_pt import EmceePTSampler
+    samplers[EmceeEnsembleSampler.name] = EmceeEnsembleSampler
+    samplers[EmceePTSampler.name] = EmceePTSampler
+except ImportError:
+    pass
+
+try:
+    from .epsie import EpsieSampler
+    samplers[EpsieSampler.name] = EpsieSampler
+except ImportError:
+    pass
+
+try:
+    from .ptemcee import PTEmceeSampler
+    samplers[PTEmceeSampler.name] = PTEmceeSampler
+except ImportError:
+    pass
+
+try:
+    from .cpnest import CPNestSampler
+    samplers[CPNestSampler.name] = CPNestSampler
+except ImportError:
+    pass
+
+try:
+    from .dynesty import DynestySampler
+    samplers[DynestySampler.name] = DynestySampler
+except ImportError:
+    pass
 
 def load_from_config(cp, model, **kwargs):
     """Loads a sampler from the given config file.
@@ -51,5 +85,9 @@ def load_from_config(cp, model, **kwargs):
     sampler :
         The initialized sampler.
     """
+    if len(model.variable_params) == 0:
+        logging.info('No variable params, so assuming Dummy Sampler')
+        return DummySampler.from_config(cp, model, **kwargs)
+
     name = cp.get('sampler', 'name')
     return samplers[name].from_config(cp, model, **kwargs)
